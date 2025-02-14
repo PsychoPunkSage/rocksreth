@@ -148,7 +148,7 @@ members = [
     "examples/txpool-tracing/",
     "examples/custom-beacon-withdrawals",
     "testing/ef-tests/",
-    "testing/testing-utils",
+    "testing/testing-utils", "crates/storage/db-rocks",
 ]
 default-members = ["bin/reth"]
 exclude = ["book/sources"]
@@ -320,6 +320,7 @@ reth-db = { path = "crates/storage/db", default-features = false }
 reth-db-api = { path = "crates/storage/db-api" }
 reth-db-common = { path = "crates/storage/db-common" }
 reth-db-models = { path = "crates/storage/db-models" }
+reth-db-rocks = {path = "crates/storage/db-rocks" }
 reth-discv4 = { path = "crates/net/discv4" }
 reth-discv5 = { path = "crates/net/discv5" }
 reth-dns-discovery = { path = "crates/net/dns" }

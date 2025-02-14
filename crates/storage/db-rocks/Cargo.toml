@@ -1,0 +1,61 @@
+[package]
+name = "reth-db-rocks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+exclude.workspace = true
+
+[dependencies]
+# reth dependencies
+reth-primitives.workspace = true
+reth-db-api.workspace = true
+reth-codecs.workspace = true
+reth-storage-api.workspace = true
+
+# rocksdb
+rocksdb = { version = "0.23.0", default-features = false, features = [
+    "multi-threaded-cf",
+] }
+
+# database interfaces
+bytes = { workspace = true }
+eyre = { workspace = true }
+
+# metrics and monitoring
+metrics = { workspace = true }
+tracing = { workspace = true }
+
+# utility
+thiserror = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+# testing
+proptest = { workspace = true }
+tempfile = { workspace = true }
+criterion = { workspace = true }
+assert_matches = { workspace = true }
+
+# reth testing utils
+reth-primitives = { workspace = true, features = ["test-utils"] }
+reth-db-api = { workspace = true }
+
+[[bench]]
+name = "get"
+harness = false
+
+[[bench]]
+name = "criterion"
+harness = false
+
+# misc
+parking_lot.workspace = true
+tracing.workspace = true
+metrics.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

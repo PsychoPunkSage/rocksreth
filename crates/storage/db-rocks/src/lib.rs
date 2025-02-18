@@ -25,10 +25,17 @@ src/version.rs      -> Manages database versioning and migration logic
 //!
 //! This crate provides a RocksDB-backed storage implementation for RETH.
 
+#![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
+#![warn(missing_copy_implementations)]
+#![warn(rust_2018_idioms)]
+
+mod db;
 mod errors;
 mod implementation;
 mod metrics;
 mod tables;
+mod test;
 mod version;
 
 pub use errors::RocksDBError;
@@ -156,3 +163,11 @@ mod tests {
         assert!(db.metrics().is_some());
     }
 }
+
+/*
+> This codebase implements a RocksDB storage layer for RETH. At its core, it provides a way to store and retrieve blockchain data using RocksDB instead of MDBX. The implementation handles database operations through tables (like accounts, transactions, etc.) where each table is a separate column family in RocksDB.
+> The cursor system lets you iterate through data in these tables, similar to how you'd scan through entries in a database. The DUPSORT feature (which MDBX has natively but RocksDB doesn't) is implemented manually to allow multiple values per key, which is crucial for certain blockchain data structures like state history.
+> All database operations are wrapped in transactions, either read-only or read-write, to maintain data consistency. The metrics module tracks performance and usage statistics, while the version management ensures proper database schema upgrades.
+> The codecs part handles how data is serialized and deserialized - converting Ethereum types (like addresses and transactions) into bytes for storage and back. Error handling is centralized to provide consistent error reporting across all database operations.
+> Think of it as a specialized database adapter that makes RocksDB behave exactly how RETH expects its storage layer to work, with all the specific features needed for an Ethereum client. It's basically translating RETH's storage requirements into RocksDB operations while maintaining all the necessary blockchain-specific functionality.
+*/

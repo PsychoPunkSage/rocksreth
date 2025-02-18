@@ -4,6 +4,8 @@ use reth_db_api::{
     DatabaseError,
 };
 
+pub mod trie;
+
 /// Trait for RocksDB-specific encoding optimizations
 pub(crate) trait RocksDbEncode: Encode {
     /// Encode directly to a bytes buffer

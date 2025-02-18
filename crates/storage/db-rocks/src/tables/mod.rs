@@ -1,6 +1,14 @@
+pub mod codecs;
+pub mod raw;
+pub mod trie;
+pub mod utils;
+
 use reth_db_api::table::Table;
 use reth_db_api::DatabaseError;
 use rocksdb::{ColumnFamilyDescriptor, Options};
+
+// mod trie;
+// pub use trie::*;
 
 /// Trait for getting RocksDB-specific table configurations
 pub(crate) trait TableConfig: Table {

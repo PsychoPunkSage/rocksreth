@@ -1,3 +1,5 @@
+pub mod rocks;
+
 use parking_lot::RwLock;
 use reth_db_api::{
     transaction::{DbTx, DbTxMut},

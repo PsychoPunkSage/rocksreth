@@ -1,9 +1,11 @@
+use crate::implementation::rocks::trie::RocksTrieCursorFactory;
 use reth_db_api::{
     cursor::{DbCursorRO, DbCursorRW, DbDupCursorRO, DbDupCursorRW},
     table::{DupSort, Table},
     transaction::{DbTx, DbTxMut},
     DatabaseError,
 };
+use reth_trie_db::{HashedCursor, TrieCursor};
 use rocksdb::{ColumnFamilyDescriptor, ReadOptions, WriteBatch, WriteOptions, DB};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -19,6 +21,8 @@ pub struct RocksTransaction<const WRITE: bool> {
     read_opts: ReadOptions,
     /// Write options
     write_opts: WriteOptions,
+    /// Trie cursor factory
+    trie_cursor_factory: RocksTrieCursorFactory,
     /// Marker for transaction type
     _marker: PhantomData<bool>,
 }
@@ -27,12 +31,14 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
     /// Create new transaction
     pub(crate) fn new(db: Arc<DB>, _write: bool) -> Self {
         let batch = if WRITE { Some(WriteBatch::default()) } else { None };
+        let trie_cursor_factory = RocksTrieCursorFactory::new(db.clone());
 
         Self {
             db,
             batch,
             read_opts: ReadOptions::default(),
             write_opts: WriteOptions::default(),
+            trie_cursor_factory,
             _marker: PhantomData,
         }
     }
@@ -42,6 +48,11 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
         self.db
             .cf_handle(T::NAME)
             .ok_or_else(|| DatabaseError::Other(format!("Column family not found: {}", T::NAME)))
+    }
+
+    /// Get trie cursor factory
+    pub fn trie_cursor_factory(&self) -> &RocksTrieCursorFactory {
+        &self.trie_cursor_factory
     }
 }
 

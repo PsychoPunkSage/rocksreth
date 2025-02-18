@@ -1,173 +1,295 @@
 use reth_db_api::{
-    cursor::{DbCursorRO, DbCursorRW, DbDupCursorRO, DbDupCursorRW, Walker},
+    cursor::{
+        DbCursorRO, DbCursorRW, DbDupCursorRO, DupWalker, RangeWalker, ReverseWalker, Walker,
+    },
     table::{DupSort, Table},
     DatabaseError,
 };
-use rocksdb::{DBIterator, Direction, IteratorMode, DB};
-use std::marker::PhantomData;
+use rocksdb::{ColumnFamily, Direction, IteratorMode, ReadOptions, DB};
+use std::ops::RangeBounds;
 use std::sync::Arc;
 
 /// RocksDB cursor implementation
 pub struct RocksCursor<T: Table, const WRITE: bool> {
-    /// Database reference
     db: Arc<DB>,
-    /// Column family
-    cf: Arc<rocksdb::ColumnFamily>,
-    /// Current iterator
-    iter: DBIterator<'static>,
-    /// Marker for table type
-    _marker: PhantomData<T>,
+    cf: Arc<ColumnFamily>,
+    iter: rocksdb::DBIterator<Arc<DB>>,
+    _marker: std::marker::PhantomData<T>,
 }
 
 impl<T: Table, const WRITE: bool> RocksCursor<T, WRITE> {
-    pub(crate) fn new(db: Arc<DB>, cf: Arc<rocksdb::ColumnFamily>) -> Result<Self, DatabaseError> {
-        let iter = db.iterator_cf(&cf, IteratorMode::Start);
+    pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
+        let mut read_opts = ReadOptions::default();
+        read_opts.set_verify_checksums(false);
+        let iter = db.iterator_cf_opt(&cf, read_opts, IteratorMode::Start);
 
-        Ok(Self { db, cf, iter, _marker: PhantomData })
+        Ok(Self { db, cf, iter, _marker: std::marker::PhantomData })
     }
 }
 
 impl<T: Table, const WRITE: bool> DbCursorRO<T> for RocksCursor<T, WRITE> {
     fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.iter.set_mode(IteratorMode::Start);
+        self.iter.seek_to_first();
         match self.iter.next() {
-            Some(Ok((key, value))) => Ok(Some((T::Key::decode(&key)?, T::Value::decode(&value)?))),
-            Some(Err(e)) => Err(DatabaseError::Backend(Box::new(e))),
+            Some(Ok((k, v))) => Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?))),
             None => Ok(None),
-        }
-    }
-
-    fn seek(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let key_bytes = key.encode();
-        self.iter.set_mode(IteratorMode::From(&key_bytes, Direction::Forward));
-
-        match self.iter.next() {
-            Some(Ok((key, value))) => Ok(Some((T::Key::decode(&key)?, T::Value::decode(&value)?))),
-            Some(Err(e)) => Err(DatabaseError::Backend(Box::new(e))),
-            None => Ok(None),
+            Some(Err(e)) => Err(DatabaseError::Backend(e.to_string())),
         }
     }
 
     fn seek_exact(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         let key_bytes = key.encode();
-        self.iter.set_mode(IteratorMode::From(&key_bytes, Direction::Forward));
-
-        match self.iter.next() {
-            Some(Ok((found_key, value))) if found_key == key_bytes => {
-                Ok(Some((T::Key::decode(&found_key)?, T::Value::decode(&value)?)))
+        if let Some(Ok((k, v))) = self.iter.seek(key_bytes) {
+            if k == key.encode() {
+                return Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?)));
             }
-            _ => Ok(None),
         }
+        Ok(None)
+    }
+
+    fn seek(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        if let Some(Ok((k, v))) = self.iter.seek(key.encode()) {
+            return Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?)));
+        }
+        Ok(None)
     }
 
     fn next(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         match self.iter.next() {
-            Some(Ok((key, value))) => Ok(Some((T::Key::decode(&key)?, T::Value::decode(&value)?))),
-            Some(Err(e)) => Err(DatabaseError::Backend(Box::new(e))),
+            Some(Ok((k, v))) => Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?))),
             None => Ok(None),
+            Some(Err(e)) => Err(DatabaseError::Backend(e.to_string())),
         }
     }
 
     fn prev(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         self.iter.prev();
         match self.iter.next() {
-            Some(Ok((key, value))) => Ok(Some((T::Key::decode(&key)?, T::Value::decode(&value)?))),
-            Some(Err(e)) => Err(DatabaseError::Backend(Box::new(e))),
+            Some(Ok((k, v))) => Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?))),
             None => Ok(None),
+            Some(Err(e)) => Err(DatabaseError::Backend(e.to_string())),
         }
     }
 
     fn last(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.iter.set_mode(IteratorMode::End);
+        self.iter.seek_to_last();
         match self.iter.next() {
-            Some(Ok((key, value))) => Ok(Some((T::Key::decode(&key)?, T::Value::decode(&value)?))),
-            Some(Err(e)) => Err(DatabaseError::Backend(Box::new(e))),
+            Some(Ok((k, v))) => Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?))),
             None => Ok(None),
+            Some(Err(e)) => Err(DatabaseError::Backend(e.to_string())),
         }
     }
 
     fn current(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        match self.iter.current() {
-            Some(Ok((key, value))) => Ok(Some((T::Key::decode(&key)?, T::Value::decode(&value)?))),
-            Some(Err(e)) => Err(DatabaseError::Backend(Box::new(e))),
+        match self.iter.item() {
+            Some(Ok((k, v))) => Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?))),
             None => Ok(None),
+            Some(Err(e)) => Err(DatabaseError::Backend(e.to_string())),
         }
     }
-}
 
-/// RocksDB implementation of duplicate cursor
-pub struct RocksDupCursor<T: DupSort, const WRITE: bool> {
-    cursor: RocksCursor<T, WRITE>,
-}
+    fn walk(&mut self, start_key: Option<T::Key>) -> Result<Walker<'_, T, Self>, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let start = if let Some(key) = start_key { self.seek(key)? } else { self.first()? };
+        Ok(Walker::new(self, Ok(start)))
+    }
 
-impl<T: DupSort, const WRITE: bool> RocksDupCursor<T, WRITE> {
-    pub(crate) fn new(db: Arc<DB>, cf: Arc<rocksdb::ColumnFamily>) -> Result<Self, DatabaseError> {
-        Ok(Self { cursor: RocksCursor::new(db, cf)? })
+    fn walk_range(
+        &mut self,
+        range: impl RangeBounds<T::Key>,
+    ) -> Result<RangeWalker<'_, T, Self>, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let start = match range.start_bound() {
+            Bound::Included(key) => self.seek(key.clone())?,
+            Bound::Excluded(key) => {
+                let mut pos = self.seek(key.clone())?;
+                if pos.is_some() {
+                    pos = self.next()?;
+                }
+                pos
+            }
+            Bound::Unbounded => self.first()?,
+        };
+
+        let end_bound = match range.end_bound() {
+            Bound::Included(key) => Bound::Included(key.clone()),
+            Bound::Excluded(key) => Bound::Excluded(key.clone()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        Ok(RangeWalker::new(self, Ok(start), end_bound))
+    }
+
+    fn walk_back(
+        &mut self,
+        start_key: Option<T::Key>,
+    ) -> Result<ReverseWalker<'_, T, Self>, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let start = if let Some(key) = start_key { self.seek(key)? } else { self.last()? };
+
+        Ok(ReverseWalker::new(self, Ok(start)))
     }
 }
 
-// Implement required cursor traits for RocksDupCursor
-impl<T: DupSort, const WRITE: bool> DbCursorRO<T> for RocksDupCursor<T, WRITE> {
-    fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.cursor.first()
-    }
-
-    fn seek(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.cursor.seek(key)
-    }
-
-    fn seek_exact(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.cursor.seek_exact(key)
-    }
-
-    fn next(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.cursor.next()
-    }
-
-    fn prev(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.cursor.prev()
-    }
-
-    fn current(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.cursor.current()
-    }
-
-    fn last(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.cursor.last()
-    }
-}
-
-// For write transactions
 impl<T: Table> DbCursorRW<T> for RocksCursor<T, true> {
-    fn put(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
+    fn upsert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
         let key_bytes = key.encode();
-        let value_bytes = value.compress();
-        self.db.put_cf(&self.cf, key_bytes, value_bytes)?;
-        Ok(())
+        let value_bytes = value.encode();
+        self.db
+            .put_cf(&self.cf, key_bytes, value_bytes)
+            .map_err(|e| DatabaseError::Backend(e.to_string()))
+    }
+
+    fn insert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
+        if self.seek_exact(key.clone())?.is_some() {
+            return Err(DatabaseError::KeyExists);
+        }
+        self.upsert(key, value)
+    }
+
+    fn append(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
+        self.upsert(key, value)
     }
 
     fn delete_current(&mut self) -> Result<(), DatabaseError> {
-        if let Some(Ok((key, _))) = self.iter.current() {
-            self.db.delete_cf(&self.cf, key)?;
+        if let Some((key, _)) = self.current()? {
+            self.db
+                .delete_cf(&self.cf, key.encode())
+                .map_err(|e| DatabaseError::Backend(e.to_string()))?;
         }
         Ok(())
     }
 }
 
-// Implement DupSort capabilities
+/// RocksDB duplicate cursor implementation
+pub struct RocksDupCursor<T: DupSort, const WRITE: bool> {
+    inner: RocksCursor<T, WRITE>,
+    current_key: Option<T::Key>,
+}
+
+impl<T: DupSort, const WRITE: bool> RocksDupCursor<T, WRITE> {
+    pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
+        Ok(Self { inner: RocksCursor::new(db, cf)?, current_key: None })
+    }
+}
+
+impl<T: DupSort, const WRITE: bool> DbCursorRO<T> for RocksDupCursor<T, WRITE> {
+    fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let result = self.inner.first()?;
+        if let Some((key, _)) = &result {
+            self.current_key = Some(key.clone());
+        }
+        Ok(result)
+    }
+
+    // Implement other required methods similar to RocksCursor...
+    // Copy implementations from RocksCursor but maintain current_key state
+
+    fn seek_exact(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let result = self.inner.seek_exact(key.clone())?;
+        if result.is_some() {
+            self.current_key = Some(key);
+        }
+        Ok(result)
+    }
+
+    fn seek(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let result = self.inner.seek(key)?;
+        if let Some((key, _)) = &result {
+            self.current_key = Some(key.clone());
+        }
+        Ok(result)
+    }
+
+    fn next(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let result = self.inner.next()?;
+        if let Some((key, _)) = &result {
+            self.current_key = Some(key.clone());
+        }
+        Ok(result)
+    }
+
+    fn prev(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let result = self.inner.prev()?;
+        if let Some((key, _)) = &result {
+            self.current_key = Some(key.clone());
+        }
+        Ok(result)
+    }
+
+    fn last(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let result = self.inner.last()?;
+        if let Some((key, _)) = &result {
+            self.current_key = Some(key.clone());
+        }
+        Ok(result)
+    }
+
+    fn current(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        self.inner.current()
+    }
+
+    fn walk(&mut self, start_key: Option<T::Key>) -> Result<Walker<'_, T, Self>, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let start = if let Some(key) = start_key { self.seek(key)? } else { self.first()? };
+        Ok(Walker::new(self, Ok(start)))
+    }
+
+    fn walk_range(
+        &mut self,
+        range: impl RangeBounds<T::Key>,
+    ) -> Result<RangeWalker<'_, T, Self>, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let start = match range.start_bound() {
+            Bound::Included(key) => self.seek(key.clone())?,
+            Bound::Excluded(key) => {
+                let mut pos = self.seek(key.clone())?;
+                if pos.is_some() {
+                    pos = self.next()?;
+                }
+                pos
+            }
+            Bound::Unbounded => self.first()?,
+        };
+
+        let end_bound = match range.end_bound() {
+            Bound::Included(key) => Bound::Included(key.clone()),
+            Bound::Excluded(key) => Bound::Excluded(key.clone()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        Ok(RangeWalker::new(self, Ok(start), end_bound))
+    }
+
+    fn walk_back(
+        &mut self,
+        start_key: Option<T::Key>,
+    ) -> Result<ReverseWalker<'_, T, Self>, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let start = if let Some(key) = start_key { self.seek(key)? } else { self.last()? };
+        Ok(ReverseWalker::new(self, Ok(start)))
+    }
+}
+
 impl<T: DupSort> DbDupCursorRO<T> for RocksDupCursor<T, true> {
     fn next_dup(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        // Get current key
-        if let Some(Ok((composite_key, value))) = self.cursor.iter.current() {
-            let (current_key, _) = DupSortHelper::split_composite_key::<T>(&composite_key)?;
-
-            // Get next entry
-            if let Some(Ok((next_composite, next_value))) = self.cursor.iter.next() {
-                let (next_key, _) = DupSortHelper::split_composite_key::<T>(&next_composite)?;
-
-                // Check if we're still on same key
-                if current_key == next_key {
-                    return Ok(Some((next_key, T::Value::decode(&next_value)?)));
+        if let Some(current_key) = &self.current_key {
+            let next = self.inner.next()?;
+            if let Some((key, value)) = next {
+                if &key == current_key {
+                    return Ok(Some((key, value)));
                 }
             }
         }
@@ -175,35 +297,17 @@ impl<T: DupSort> DbDupCursorRO<T> for RocksDupCursor<T, true> {
     }
 
     fn next_no_dup(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        // Get current key
-        if let Some(Ok((composite_key, _))) = self.cursor.iter.current() {
-            let (current_key, _) = DupSortHelper::split_composite_key::<T>(&composite_key)?;
-
-            // Skip all entries with same key
-            while let Some(Ok((next_composite, next_value))) = self.cursor.iter.next() {
-                let (next_key, _) = DupSortHelper::split_composite_key::<T>(&next_composite)?;
-                if current_key != next_key {
-                    return Ok(Some((next_key, T::Value::decode(&next_value)?)));
-                }
+        while let Some((key, _)) = self.next()? {
+            if Some(&key) != self.current_key.as_ref() {
+                self.current_key = Some(key.clone());
+                return self.current();
             }
         }
         Ok(None)
     }
 
     fn next_dup_val(&mut self) -> Result<Option<T::Value>, DatabaseError> {
-        // Similar to next_dup but returns only value
-        if let Some(Ok((composite_key, value))) = self.cursor.iter.current() {
-            let (current_key, _) = DupSortHelper::split_composite_key::<T>(&composite_key)?;
-
-            if let Some(Ok((next_composite, next_value))) = self.cursor.iter.next() {
-                let (next_key, _) = DupSortHelper::split_composite_key::<T>(&next_composite)?;
-
-                if current_key == next_key {
-                    return Ok(Some(T::Value::decode(&next_value)?));
-                }
-            }
-        }
-        Ok(None)
+        self.next_dup().map(|opt| opt.map(|(_, v)| v))
     }
 
     fn seek_by_key_subkey(
@@ -211,16 +315,30 @@ impl<T: DupSort> DbDupCursorRO<T> for RocksDupCursor<T, true> {
         key: T::Key,
         subkey: T::SubKey,
     ) -> Result<Option<T::Value>, DatabaseError> {
-        let composite_key = DupSortHelper::create_composite_key::<T>(&key, &subkey)?;
+        let composite_key = T::compose_key(&key, &subkey);
+        self.inner.seek_exact(composite_key).map(|opt| opt.map(|(_, v)| v))
+    }
 
-        self.cursor.iter.set_mode(IteratorMode::From(&composite_key, Direction::Forward));
-
-        if let Some(Ok((found_key, value))) = self.cursor.iter.next() {
-            if found_key == composite_key {
-                return Ok(Some(T::Value::decode(&value)?));
+    fn walk_dup(
+        &mut self,
+        key: Option<T::Key>,
+        subkey: Option<T::SubKey>,
+    ) -> Result<DupWalker<'_, T, Self>, DatabaseError>
+    where
+        Self: Sized,
+    {
+        match (key, subkey) {
+            (Some(k), Some(sk)) => {
+                self.seek_by_key_subkey(k.clone(), sk)?;
+                self.current_key = Some(k);
             }
+            (Some(k), None) => {
+                self.seek(k.clone())?;
+                self.current_key = Some(k);
+            }
+            (None, Some(_)) => self.first()?,
+            (None, None) => self.first()?,
         }
-
-        Ok(None)
+        Ok(DupWalker::new(self))
     }
 }

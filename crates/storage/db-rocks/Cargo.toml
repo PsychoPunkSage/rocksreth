@@ -12,6 +12,7 @@ exclude.workspace = true
 # reth dependencies
 reth-primitives.workspace = true
 reth-db-api.workspace = true
+reth-db.workspace = true
 reth-codecs.workspace = true
 reth-storage-api.workspace = true
 reth-trie = { workspace = true }
@@ -24,6 +25,7 @@ reth-execution-errors = { workspace = true }
 rocksdb = { version = "0.23.0", default-features = false, features = [
     "multi-threaded-cf",
 ] }
+serde = { version = "1.0.218", features = ["derive"] }
 
 # database interfaces
 bytes = { workspace = true }

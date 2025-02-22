@@ -1,21 +1,48 @@
 /*
-Cargo.toml           -> Defines dependencies and package configuration for the RocksDB implementation
-benches/criterion.rs -> Main benchmark configuration and setup for RocksDB performance testing
-benches/get.rs      -> Specific benchmarks for testing database read operations
-benches/utils.rs    -> Shared utilities and helper functions used across benchmarks
+RETH RocksDB Implementation Structure
 
-src/lib.rs          -> Main entry point that exports public API and manages module organization
-src/implementation/mod.rs      -> Manages database implementation modules and common traits
-src/implementation/rocks/cursor.rs -> Implements iterators/cursors for traversing RocksDB data
-src/implementation/rocks/mod.rs    -> Core RocksDB wrapper and database operations implementation
-src/implementation/rocks/tx.rs     -> Handles RocksDB transaction management and batching
+>>> Root Files
+- `Cargo.toml` - Package configuration, dependencies, and features for the RocksDB implementation
+- `src/lib.rs` - Main library entry point, exports public API and manages module organization
+- `src/db.rs` - Core database interface implementation and main DB struct definitions
+- `src/errors.rs` - Custom error types and error handling for the RocksDB implementation
+- `src/metrics.rs` - Performance metrics collection and monitoring infrastructure
+- `src/version.rs` - Database versioning, schema migrations, and compatibility management
 
-src/metrics.rs      -> Defines and collects performance and operational metrics for monitoring
-src/tables/codecs/mod.rs -> Handles serialization/deserialization of data for storage
-src/tables/mod.rs   -> Defines database table structures and schemas
-src/tables/raw.rs   -> Low-level table operations without encoding/decoding
-src/tables/utils.rs -> Helper functions for table management and operations
-src/version.rs      -> Manages database versioning and migration logic
+>>> Benchmarks
+- `benches/criterion.rs` - Main benchmark configuration and setup for performance testing
+- `benches/get.rs` - Specific benchmarks for database read operations and performance
+- `benches/util.rs` - Shared utilities and helper functions for benchmarking
+
+>>> Implementation Layer (`src/implementation/`)
+#>> Core Implementation <<#
+- `implementation/mod.rs` - Manages database implementation modules and common traits
+
+#>> RocksDB Specific (`implementation/rocks/`) <<#
+- `rocks/mod.rs` - Core RocksDB wrapper and primary database operations
+- `rocks/cursor.rs` - Cursor implementations for iterating over RocksDB data
+- `rocks/dupsort.rs` - Duplicate sort functionality for RocksDB
+- `rocks/tx.rs` - Transaction management, batching, and ACID compliance
+
+#>> Trie Implementation (`implementation/rocks/trie/`) <<#
+- `trie/mod.rs` - Main trie functionality coordination
+- `trie/cursor.rs` - Specialized cursors for trie traversal
+- `trie/storage.rs` - Storage layer for trie data structures
+- `trie/witness.rs` - Witness generation and verification for tries
+
+>>> Tables Layer (`src/tables/`)
+#>> Core Tables <<#
+- `tables/mod.rs` - Table definitions, traits, and organization
+- `tables/raw.rs` - Low-level table operations without encoding
+- `tables/trie.rs` - Trie-specific table implementations
+- `tables/utils.rs` - Helper functions for table management
+
+#>> Codecs (`tables/codecs/`) <<#
+- `codecs/mod.rs` - Codec management and common encoding traits
+- `codecs/trie.rs` - Specialized codecs for trie data structures
+
+>>> Tests (left)
+- `test/mod.rs` - Test organization and shared test utilities
 */
 //! RocksDB implementation for RETH
 //!

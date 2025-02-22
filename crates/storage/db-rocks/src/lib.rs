@@ -44,7 +44,7 @@ use metrics::DatabaseMetrics;
 use std::{path::Path, sync::Arc};
 
 // Re-export important types
-pub use implementation::rocks::{RocksDBConfig, RocksTransaction};
+pub use implementation::rocks::{tx::RocksTransaction, RocksDBConfig};
 
 /// Database environment for RocksDB
 #[derive(Debug)]

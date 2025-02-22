@@ -1,62 +1,116 @@
 use crate::{
     implementation::rocks::RocksTransaction,
-    tables::{AccountTrieTable, StorageTrieTable, TrieTable},
+    tables::trie::{AccountTrieTable, StorageTrieTable, TrieTable},
 };
+use alloy_primitives::{Address, B256};
 use reth_db_api::{transaction::DbTxMut, DatabaseError};
-use reth_primitives::{Account, Address, H256};
-use reth_trie_db::{DatabaseStateRoot, DatabaseStorageRoot, StateCommitment, TrieChanges};
+use reth_execution_errors::StateRootError;
+use reth_primitives::Account;
+use reth_trie::{updates::TrieUpdates, HashedPostState, StateRootProgress, TrieInput};
+use reth_trie_db::{DatabaseStateRoot, DatabaseStorageRoot, StateCommitment};
 
 /// Implementation of trie storage operations
 impl<const WRITE: bool> RocksTransaction<WRITE> {
     /// Get a trie node by its hash
-    pub fn get_node(&self, hash: H256) -> Result<Option<Vec<u8>>, DatabaseError> {
+    pub fn get_node(&self, hash: B256) -> Result<Option<Vec<u8>>, DatabaseError> {
         self.get::<TrieTable>(hash)
     }
 
     /// Get an account by its hash
-    pub fn get_account(&self, hash: H256) -> Result<Option<Account>, DatabaseError> {
+    pub fn get_account(&self, hash: B256) -> Result<Option<Account>, DatabaseError> {
         self.get::<AccountTrieTable>(hash)
     }
 
     /// Get storage value for account and key
-    pub fn get_storage(&self, account: H256, key: H256) -> Result<Option<H256>, DatabaseError> {
+    pub fn get_storage(&self, account: B256, key: B256) -> Result<Option<B256>, DatabaseError> {
         self.get::<StorageTrieTable>((account, key))
     }
 }
 
-impl StateCommitment for RocksTransaction<true> {
-    fn commit_changes(&mut self, changes: TrieChanges) -> Result<H256, DatabaseError> {
-        // Write trie nodes
-        for (hash, node) in changes.nodes {
-            self.put::<TrieTable>(hash, node)?;
-        }
+impl<'a> DatabaseStateRoot<'a, RocksTransaction<false>> for RocksTransaction<false> {
+    fn from_tx(tx: &'a RocksTransaction<false>) -> Self {
+        tx.clone()
+    }
 
-        // Write account changes
-        for (hash, account) in changes.accounts {
-            self.put::<AccountTrieTable>(hash, account)?;
-        }
+    fn incremental_root_calculator(
+        tx: &'a RocksTransaction<false>,
+        range: std::ops::RangeInclusive<u64>,
+    ) -> Result<Self, reth_execution_errors::StateRootError> {
+        Ok(tx.clone())
+    }
 
-        // Write storage changes
-        for ((account, key), value) in changes.storage {
-            self.put::<StorageTrieTable>((account, key), value)?;
-        }
+    fn incremental_root(
+        tx: &'a RocksTransaction<false>,
+        range: std::ops::RangeInclusive<u64>,
+    ) -> Result<B256, reth_execution_errors::StateRootError> {
+        // Computes root for the given block range
+        todo!("Implement incremental root calculation")
+    }
 
-        Ok(changes.root)
+    fn incremental_root_with_updates(
+        tx: &'a RocksTransaction<false>,
+        range: std::ops::RangeInclusive<u64>,
+    ) -> Result<(B256, TrieUpdates), reth_execution_errors::StateRootError> {
+        // Computes root and collects updates
+        todo!("Implement incremental root with updates")
+    }
+
+    fn incremental_root_with_progress(
+        tx: &'a RocksTransaction<false>,
+        range: std::ops::RangeInclusive<u64>,
+    ) -> Result<StateRootProgress, reth_execution_errors::StateRootError> {
+        // Computes root with progress tracking
+        todo!("Implement incremental root with progress")
+    }
+
+    fn overlay_root(
+        tx: &'a RocksTransaction<false>,
+        post_state: HashedPostState,
+    ) -> Result<B256, reth_execution_errors::StateRootError> {
+        // Calculate root from post state
+        todo!("Implement overlay root")
+    }
+
+    fn overlay_root_with_updates(
+        tx: &'a RocksTransaction<false>,
+        post_state: HashedPostState,
+    ) -> Result<(B256, TrieUpdates), reth_execution_errors::StateRootError> {
+        // Calculate root and collect updates
+        todo!("Implement overlay root with updates")
+    }
+
+    fn overlay_root_from_nodes(
+        tx: &'a RocksTransaction<false>,
+        input: TrieInput,
+    ) -> Result<B256, reth_execution_errors::StateRootError> {
+        // Calculate root using provided nodes
+        todo!("Implement overlay root from nodes")
+    }
+
+    fn overlay_root_from_nodes_with_updates(
+        tx: &'a RocksTransaction<false>,
+        input: TrieInput,
+    ) -> Result<(B256, TrieUpdates), reth_execution_errors::StateRootError> {
+        // Calculate root and collect updates using provided nodes
+        todo!("Implement overlay root from nodes with updates")
     }
 }
 
-impl DatabaseStateRoot for RocksTransaction<false> {
-    fn state_root(&self, block_hash: H256) -> Result<Option<H256>, DatabaseError> {
-        self.get::<TrieTable>(block_hash)
+impl<'a> DatabaseStorageRoot<'a, RocksTransaction<false>> for RocksTransaction<false> {
+    fn from_tx(tx: &'a RocksTransaction<false>, address: Address) -> Self {
+        tx.clone()
     }
-}
 
-impl DatabaseStorageRoot for RocksTransaction<false> {
-    fn storage_root(
-        &self,
+    fn from_tx_hashed(tx: &'a RocksTransaction<false>, hashed_address: B256) -> Self {
+        tx.clone()
+    }
+
+    fn overlay_root(
+        tx: &'a RocksTransaction<false>,
         address: Address,
-        block_hash: H256,
-    ) -> Result<Option<H256>, DatabaseError> {
-        self.get::<StorageTrieTable>((address.into(), block_hash))
+        hashed_storage: reth_trie::HashedStorage,
+    ) -> Result<B256, reth_execution_errors::StorageRootError> {
+        // Implement storage root calculation
+        todo!()
     }
 }

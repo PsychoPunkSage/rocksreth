@@ -15,7 +15,7 @@ impl TableUtils {
 
     /// Get all table names that should exist in the database
     pub fn get_expected_table_names() -> Vec<String> {
-        use reth_db_api::Tables;
+        use reth_db::Tables;
         Tables::ALL.iter().map(|t| t.name().to_string()).collect()
     }
 

@@ -5,9 +5,9 @@ mod witness;
 pub use cursor::*;
 pub use storage::*;
 
+use alloy_primitives::B256;
 use reth_db_api::DatabaseError;
-use reth_primitives::H256;
-use reth_trie_db::HashedCursor;
+use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseHashedStorageCursor};
 
 /// Common trait for RocksDB trie cursors
 pub trait RocksTrieCursorOps {

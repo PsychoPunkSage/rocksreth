@@ -1,6 +1,6 @@
 use crate::{
-    implementation::rocks::RocksTransaction,
-    tables::{AccountTrieTable, StorageTrieTable, TrieTable, TrieTableConfigs},
+    implementation::rocks::tx::RocksTransaction,
+    tables::trie::{AccountTrieTable, StorageTrieTable, TrieTable, TrieTableConfigs},
 };
 use reth_db_api::{database::Database, DatabaseError};
 use rocksdb::{ColumnFamilyDescriptor, Options, DB};

@@ -1,3 +1,4 @@
+use crate::implementation::rocks::tx::RocksTransaction;
 use crate::tables::utils::TableUtils;
 use parking_lot::RwLock;
 use reth_db_api::{
@@ -9,6 +10,7 @@ use std::{path::Path, sync::Arc};
 
 pub mod cursor;
 pub mod dupsort;
+pub mod trie;
 pub mod tx;
 
 /// Default write buffer size (64 MB)

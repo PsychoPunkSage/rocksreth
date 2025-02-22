@@ -1,5 +1,4 @@
-pub mod rocks;
-
+use crate::implementation::rocks::tx::RocksTransaction;
 use parking_lot::RwLock;
 use reth_db_api::{
     transaction::{DbTx, DbTxMut},
@@ -7,6 +6,7 @@ use reth_db_api::{
 };
 use rocksdb::{ColumnFamilyDescriptor, Options, ReadOptions, WriteOptions, DB};
 use std::{path::Path, sync::Arc};
+pub mod rocks;
 
 /// RocksDB instance wrapper
 #[derive(Debug)]

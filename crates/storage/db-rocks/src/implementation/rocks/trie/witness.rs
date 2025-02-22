@@ -7,31 +7,31 @@ use reth_trie::{
 };
 use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory, DatabaseTrieWitness};
 
-impl<'a, TX: DbTx> DatabaseTrieWitness<'a, TX>
-    for TrieWitness<DatabaseTrieCursorFactory<'a, TX>, DatabaseHashedCursorFactory<'a, TX>>
-{
-    fn from_tx(tx: &'a TX) -> Self {
-        Self::new(DatabaseTrieCursorFactory::new(tx), DatabaseHashedCursorFactory::new(tx))
-    }
+// impl<'a, TX: DbTx> DatabaseTrieWitness<'a, TX>
+//     for TrieWitness<DatabaseTrieCursorFactory<'a, TX>, DatabaseHashedCursorFactory<'a, TX>>
+// {
+//     fn from_tx(tx: &'a TX) -> Self {
+//         Self::new(DatabaseTrieCursorFactory::new(tx), DatabaseHashedCursorFactory::new(tx))
+//     }
 
-    fn overlay_witness(
-        tx: &'a TX,
-        input: TrieInput,
-        target: HashedPostState,
-    ) -> Result<B256HashMap<Bytes>, TrieWitnessError> {
-        let nodes_sorted = input.nodes.into_sorted();
-        let state_sorted = input.state.into_sorted();
+//     fn overlay_witness(
+//         tx: &'a TX,
+//         input: TrieInput,
+//         target: HashedPostState,
+//     ) -> Result<B256HashMap<Bytes>, TrieWitnessError> {
+//         let nodes_sorted = input.nodes.into_sorted();
+//         let state_sorted = input.state.into_sorted();
 
-        Self::from_tx(tx)
-            .with_trie_cursor_factory(InMemoryTrieCursorFactory::new(
-                DatabaseTrieCursorFactory::new(tx),
-                &nodes_sorted,
-            ))
-            .with_hashed_cursor_factory(HashedPostStateCursorFactory::new(
-                DatabaseHashedCursorFactory::new(tx),
-                &state_sorted,
-            ))
-            .with_prefix_sets_mut(input.prefix_sets)
-            .compute(target)
-    }
-}
+//         Self::from_tx(tx)
+//             .with_trie_cursor_factory(InMemoryTrieCursorFactory::new(
+//                 DatabaseTrieCursorFactory::new(tx),
+//                 &nodes_sorted,
+//             ))
+//             .with_hashed_cursor_factory(HashedPostStateCursorFactory::new(
+//                 DatabaseHashedCursorFactory::new(tx),
+//                 &state_sorted,
+//             ))
+//             .with_prefix_sets_mut(input.prefix_sets)
+//             .compute(target)
+//     }
+// }

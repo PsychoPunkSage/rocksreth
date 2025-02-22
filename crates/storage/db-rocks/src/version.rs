@@ -1,5 +1,3 @@
-// src/version.rs
-
 use reth_db_api::{table::Table, DatabaseError};
 use rocksdb::{Options, DB};
 use std::sync::atomic::{AtomicU32, Ordering};

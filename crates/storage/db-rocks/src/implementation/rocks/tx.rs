@@ -1,12 +1,17 @@
+use crate::implementation::rocks::cursor::{RocksCursor, RocksDupCursor};
 use crate::implementation::rocks::trie::RocksTrieCursorFactory;
+// use parking_lot::lock_api::Mutex;
+// use crate::implementation::Options;
+use parking_lot::Mutex;
 use reth_db_api::{
     cursor::{DbCursorRO, DbCursorRW, DbDupCursorRO, DbDupCursorRW},
     table::{DupSort, Table},
     transaction::{DbTx, DbTxMut},
     DatabaseError,
 };
-use reth_trie_db::{HashedCursor, TrieCursor};
-use rocksdb::{ColumnFamilyDescriptor, ReadOptions, WriteBatch, WriteOptions, DB};
+// use reth_trie_db::{hashed_cursor, trie_cursor};
+use reth_db_api::table::TableImporter;
+use rocksdb::{ColumnFamilyDescriptor, Options, ReadOptions, WriteBatch, WriteOptions, DB};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -16,7 +21,7 @@ pub struct RocksTransaction<const WRITE: bool> {
     /// Reference to DB
     db: Arc<DB>,
     /// Write batch for mutations (only used in write transactions)
-    batch: Option<WriteBatch>,
+    batch: Option<Mutex<WriteBatch>>,
     /// Read options
     read_opts: ReadOptions,
     /// Write options
@@ -30,7 +35,7 @@ pub struct RocksTransaction<const WRITE: bool> {
 impl<const WRITE: bool> RocksTransaction<WRITE> {
     /// Create new transaction
     pub(crate) fn new(db: Arc<DB>, _write: bool) -> Self {
-        let batch = if WRITE { Some(WriteBatch::default()) } else { None };
+        let batch = if WRITE { Some(Mutex::new(WriteBatch::default())) } else { None };
         let trie_cursor_factory = RocksTrieCursorFactory::new(db.clone());
 
         Self {
@@ -58,8 +63,8 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
 
 // Implement read-only transaction
 impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
-    type Cursor<T: Table> = super::cursor::RocksCursor<T, WRITE>;
-    type DupCursor<T: DupSort> = super::cursor::RocksDupCursor<T, WRITE>;
+    type Cursor<T: Table> = super::cursor::RocksCursor<'_, T, WRITE>;
+    type DupCursor<T: DupSort> = super::cursor::RocksDupCursor<'_, T, WRITE>;
 
     fn get<T: Table>(&self, key: T::Key) -> Result<Option<T::Value>, DatabaseError> {
         let cf = self.get_cf::<T>()?;
@@ -117,8 +122,8 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
 
 // Implement write transaction capabilities
 impl DbTxMut for RocksTransaction<true> {
-    type CursorMut<T: Table> = super::cursor::RocksCursor<T, true>;
-    type DupCursorMut<T: DupSort> = super::cursor::RocksDupCursor<T, true>;
+    type CursorMut<T: Table> = RocksCursor<'_, T, true>;
+    type DupCursorMut<T: DupSort> = RocksDupCursor<'_, T, true>;
 
     fn put<T: Table>(&self, key: T::Key, value: T::Value) -> Result<(), DatabaseError> {
         let cf = self.get_cf::<T>()?;
@@ -149,10 +154,63 @@ impl DbTxMut for RocksTransaction<true> {
     }
 
     fn cursor_write<T: Table>(&self) -> Result<Self::CursorMut<T>, DatabaseError> {
-        super::cursor::RocksCursor::new(self.db.clone(), self.get_cf::<T>()?.clone())
+        // super::cursor::RocksCursor::new(self.db.clone(), self.get_cf::<T>()?.clone())
+        RocksCursor::new(self.db.clone(), self.get_cf::<T>()?.clone())
     }
 
     fn cursor_dup_write<T: DupSort>(&self) -> Result<Self::DupCursorMut<T>, DatabaseError> {
-        super::cursor::RocksDupCursor::new(self.db.clone(), self.get_cf::<T>()?.clone())
+        // super::cursor::RocksDupCursor::new(self.db.clone(), self.get_cf::<T>()?.clone())
+        RocksDupCursor::new(self.db.clone(), self.get_cf::<T>()?.clone())
+    }
+}
+
+impl TableImporter for RocksTransaction<true> {
+    fn import_table<T: Table, R: DbTx>(&self, source_tx: &R) -> Result<(), DatabaseError> {
+        let mut destination_cursor = self.cursor_write::<T>()?;
+
+        for kv in source_tx.cursor_read::<T>()?.walk(None)? {
+            let (k, v) = kv?;
+            destination_cursor.append(k, &v)?;
+        }
+
+        Ok(())
+    }
+
+    fn import_table_with_range<T: Table, R: DbTx>(
+        &self,
+        source_tx: &R,
+        from: Option<<T as Table>::Key>,
+        to: <T as Table>::Key,
+    ) -> Result<(), DatabaseError>
+    where
+        T::Key: Default,
+    {
+        let mut destination_cursor = self.cursor_write::<T>()?;
+        let mut source_cursor = source_tx.cursor_read::<T>()?;
+
+        let source_range = match from {
+            Some(from) => source_cursor.walk_range(from..=to),
+            None => source_cursor.walk_range(..=to),
+        };
+        for row in source_range? {
+            let (key, value) = row?;
+            destination_cursor.append(key, &value)?;
+        }
+
+        Ok(())
+    }
+
+    fn import_dupsort<T: DupSort, R: DbTx>(&self, source_tx: &R) -> Result<(), DatabaseError> {
+        let mut destination_cursor = self.cursor_dup_write::<T>()?;
+        let mut cursor = source_tx.cursor_dup_read::<T>()?;
+
+        while let Some((k, _)) = cursor.next_no_dup()? {
+            for kv in cursor.walk_dup(Some(k), None)? {
+                let (k, v) = kv?;
+                destination_cursor.append_dup(k, v)?;
+            }
+        }
+
+        Ok(())
     }
 }

@@ -1,134 +1,223 @@
 use crate::tables::trie::{AccountTrieTable, StorageTrieTable, TrieTable};
+use crate::RocksTransaction;
 use alloy_primitives::B256;
+use reth_db::cursor;
+use reth_db::transaction::DbTx;
 use reth_db_api::{cursor::DbCursorRO, DatabaseError};
 use reth_db_api::{Decode, Encode};
 use reth_primitives::Account;
-use reth_trie_db::{
-    cursor::{TrieCursor, TrieCursorFactory}, // PP:: Cursor???
-    HashedCursor,
-}; // For encoding/decoding
-   // use reth_trie::trie_cursor::{TrieCursor, TrieCursorFactory};
-   // use reth_trie::{BranchNodeCompact, Nibbles};
+use reth_trie::{
+    hashed_cursor::{HashedCursor, HashedCursorFactory},
+    trie_cursor::{TrieCursor, TrieCursorFactory},
+};
+use reth_trie::{BranchNodeCompact, Nibbles}; // For encoding/decoding
+use reth_trie_common::{StoredNibbles, StoredNibblesSubKey};
+use reth_trie_db::trie_cursor::TrieCursor;
 use rocksdb::{ColumnFamily, Direction, IteratorMode, ReadOptions, DB};
 use std::sync::Arc;
 
-/// RocksDB implementation of trie cursor
-pub struct RocksTrieCursor<'a, T> {
-    db: Arc<DB>,
-    cf: Arc<ColumnFamily>,
-    iter: rocksdb::DBIteratorWithThreadMode<'a, DB>,
-    _marker: std::marker::PhantomData<T>,
+/// RocksDB implementation of account trie cursor
+pub struct RocksAccountTrieCursor<'tx> {
+    /// Transaction reference
+    tx: &'tx RocksTransaction<false>,
+    /// Current cursor position
+    current_key: Option<Nibbles>,
 }
 
-impl<T> RocksTrieCursor<'_, T> {
-    pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
-        let mut read_opts = ReadOptions::default();
-        read_opts.set_verify_checksums(false);
-        read_opts.set_prefetch_size(1024 * 1024); // 1MB prefetch
+/// RocksDB implementation of storage trie cursor
+pub struct RocksStorageTrieCursor<'tx> {
+    /// Transaction reference
+    tx: &'tx RocksTransaction<false>,
+    /// Account hash for storage trie
+    hashed_address: B256,
+    /// Current cursor position
+    current_key: Option<Nibbles>,
+}
 
-        let iter = db.as_ref().iterator_cf_opt(&cf, read_opts, IteratorMode::Start);
-
-        Ok(Self { db, cf, iter, _marker: std::marker::PhantomData })
+impl<'tx> RocksAccountTrieCursor<'tx> {
+    pub fn new(tx: &'tx RocksTransaction<false>) -> Self {
+        Self { tx, current_key: None }
     }
 }
 
-impl<T> TrieCursor for RocksTrieCursor<'_, T> {
+impl<'tx> RocksStorageTrieCursor<'tx> {
+    pub fn new(tx: &'tx RocksTransaction<false>, hashed_address: B256) -> Self {
+        Self { tx, hashed_address, current_key: None }
+    }
+}
+
+impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
     fn seek_exact(
         &mut self,
         key: Nibbles,
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
-        // Convert Nibbles to bytes for RocksDB key
-        let key_bytes = key.as_bytes();
-        match self.iter.seek(key_bytes) {
-            Some(Ok((k, v))) if k == key_bytes => {
-                self.current_key = Some(key.clone());
-                // Convert RocksDB value to BranchNodeCompact
-                let node = BranchNodeCompact::decode(&v)?;
-                Ok(Some((key, node)))
-            }
-            _ => {
-                self.current_key = None;
-                Ok(None)
-            }
+        // create cursor via txn
+        let mut cursor = self.tx.cursor_read::<AccountTrieTable>()?;
+
+        // Use seek_extract with StoredNibble
+        let res = cursor.seek_exact(StoredNibbles(key.clone()))?.map(|val| (val.0 .0, val.1))?;
+
+        if let Some((found_key, _)) = &res {
+            self.current_key = Some(found_key.clone());
+        } else {
+            self.current_key = None;
         }
+
+        Ok(res)
     }
 
     fn seek(
         &mut self,
         key: Nibbles,
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
-        let key_bytes = key.as_bytes();
-        match self.iter.seek(key_bytes) {
-            Some(Ok((k, v))) => {
-                let found_key = Nibbles::from_bytes(&k)?;
-                self.current_key = Some(found_key.clone());
-                let node = BranchNodeCompact::decode(&v)?;
-                Ok(Some((found_key, node)))
-            }
-            _ => {
-                self.current_key = None;
-                Ok(None)
-            }
+        // Create cursor from txn
+        let mut cursor = self.tx.cursor_read::<AccountTrieTable>()?;
+
+        // Use seek with StoredNibbles
+        let res = cursor.seek(StoredNibbles(key))?.map(|val| (val.0 .0, val.1));
+
+        if let Some((found_key, _)) = &result {
+            self.current_key = Some(found_key.clone());
+        } else {
+            self.current_key = None;
         }
+
+        Ok(result)
     }
 
     fn next(&mut self) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
-        match self.iter.next() {
-            Some(Ok((k, v))) => {
-                let key = Nibbles::from_bytes(&k)?;
-                self.current_key = Some(key.clone());
-                let node = BranchNodeCompact::decode(&v)?;
-                Ok(Some((key, node)))
+        // Create cursor from txn
+        let mut cursor = self.tx.cursor_read::<AccountTrieTable>()?;
+
+        // if have current key ? Position cursor
+        if let Some(current) = &self.current_key {
+            if let Some(_) = cursor.seek(StoredNibbles(current.clone()))? {
+                // Move to next entry after current
+                cursor.next()?
+            } else {
+                // Current key not found, start from beginning
+                cursor.first()?
             }
-            _ => {
-                self.current_key = None;
-                Ok(None)
-            }
+        } else {
+            // No current position, start from beginning
+            cursor.first()?
+        };
+
+        // Get current entry after positioning
+        let res = cursor.current()?.map(|val| (val.0 .0, val.1))?;
+
+        if let Some((found_key, _)) = &res {
+            self.current_key = Some(found_key.clone());
+        } else {
+            self.current_key = None;
         }
+
+        Ok(res)
+    }
+
+    fn current(&mut self) -> Result<Option<Nibbles>, DatabaseError> {
+        Ok(self.current_key)
+    }
+}
+
+impl<'tx> TrieCursor for RocksStorageTrieCursor<'tx> {
+    fn seek_exact(
+        &mut self,
+        key: Nibbles,
+    ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
+        let mut cursor = self.tx.cursor_dup_read::<StorageTrieTable>()?;
+
+        // Convert to the correct type
+        let subkey = StoredNibblesSubKey(key.clone());
+
+        // Use seek_by_key_subkey
+        if let Some(entry) = cursor.seek_by_key_subkey(self.hashed_address, subkey)? {
+            self.current_key = Some(key.clone());
+            return Ok(Some((key, entry.node)));
+        }
+
+        self.current_key = None;
+        Ok(None)
+    }
+
+    fn seek(
+        &mut self,
+        key: Nibbles,
+    ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
+        // Create cursor via transaction
+        let mut cursor = self.tx.cursor_dup_read::<StorageTrieTable>()?;
+
+        // Use seek_by_key_subkey with hashed_address and StoredNibblesSubKey
+        let result = cursor
+            .seek_by_key_subkey(self.hashed_address, StoredNibblesSubKey(key))?
+            .map(|value| (value.nibbles.0, value.node));
+
+        if let Some((found_key, _)) = &result {
+            self.current_key = Some(found_key.clone());
+        } else {
+            self.current_key = None;
+        }
+
+        Ok(result)
+    }
+
+    fn next(&mut self) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
+        // Create cursor via transaction
+        let mut cursor = self.tx.cursor_dup_read::<StorageTrieTable>()?;
+
+        // Position cursor if we have a current key
+        if let Some(current) = &self.current_key {
+            cursor.seek_by_key_subkey(self.hashed_address, StoredNibblesSubKey(current.clone()))?;
+        } else {
+            cursor.seek_by_key(self.hashed_address)?;
+        }
+
+        // Move to next entry with same key (duplicate)
+        let result = cursor.next_dup()?.map(|(_, v)| (v.nibbles.0, v.node));
+
+        if let Some((found_key, _)) = &result {
+            self.current_key = Some(found_key.clone());
+        } else {
+            self.current_key = None;
+        }
+
+        Ok(result)
     }
 
     fn current(&mut self) -> Result<Option<Nibbles>, DatabaseError> {
         Ok(self.current_key.clone())
     }
 }
+
 /// Factory for creating trie cursors
 pub struct RocksTrieCursorFactory {
-    db: Arc<DB>,
+    /// Transaction reference - provides context for all created cursors
+    tx: &'tx RocksTransaction<false>,
 }
 
-impl RocksTrieCursorFactory {
-    pub fn new(db: Arc<DB>) -> Self {
-        Self { db }
+impl<'tx> RocksTrieCursorFactory<'tx> {
+    /// Create a new factory
+    pub fn new(tx: &'tx RocksTransaction<false>) -> Self {
+        Self { tx }
     }
 }
 
 impl TrieCursorFactory for RocksTrieCursorFactory {
-    type AccountTrieCursor = RocksTrieCursor<'static, AccountTrieTable>;
-    type StorageTrieCursor = RocksTrieCursor<'static, StorageTrieTable>;
+    type AccountTrieCursor = RocksTrieCursor<'tx, AccountTrieTable>;
+    type StorageTrieCursor = RocksTrieCursor<'tx, StorageTrieTable>;
 
     fn account_trie_cursor(&self) -> Result<Self::AccountTrieCursor, DatabaseError> {
-        let cf = self
-            .db
-            .cf_handle(AccountTrieTable::NAME)
-            .ok_or_else(|| DatabaseError::Other("Account trie column family not found".into()))?;
-        RocksTrieCursor::new(self.db.clone(), cf.clone())
+        Ok(RocksTrieCursor::new(self.tx))
     }
 
     fn storage_trie_cursor(
         &self,
         hashed_address: B256,
     ) -> Result<Self::StorageTrieCursor, DatabaseError> {
-        let cf = self
-            .db
-            .cf_handle(StorageTrieTable::NAME)
-            .ok_or_else(|| DatabaseError::Other("Storage trie column family not found".into()))?;
+        // Convert hashed_address to bytes to use as prefix
+        let prefix = hashed_address.as_bytes().to_vec();
 
-        // You might want to store the hashed_address in the cursor or use it to set initial position
-        let mut cursor = RocksTrieCursor::new(self.db.clone(), cf.clone())?;
-
-        // Optionally seek to the hashed_address position
-        // cursor.seek_to_address(hashed_address)?;
-
-        Ok(cursor)
+        // Create cursor with the address prefix
+        Ok(RocksTrieCursor::new(self.tx).with_prefix(Some(prefix)))
     }
 }

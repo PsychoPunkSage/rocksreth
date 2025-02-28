@@ -27,7 +27,7 @@ pub struct RocksTransaction<const WRITE: bool> {
     /// Write options
     write_opts: WriteOptions,
     /// Trie cursor factory
-    trie_cursor_factory: RocksTrieCursorFactory,
+    // trie_cursor_factory: RocksTrieCursorFactory,
     /// Marker for transaction type
     _marker: PhantomData<bool>,
 }
@@ -36,14 +36,14 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
     /// Create new transaction
     pub(crate) fn new(db: Arc<DB>, _write: bool) -> Self {
         let batch = if WRITE { Some(Mutex::new(WriteBatch::default())) } else { None };
-        let trie_cursor_factory = RocksTrieCursorFactory::new(db.clone());
+        // let trie_cursor_factory = RocksTrieCursorFactory::new(db.clone());
 
         Self {
             db,
             batch,
             read_opts: ReadOptions::default(),
             write_opts: WriteOptions::default(),
-            trie_cursor_factory,
+            // trie_cursor_factory,
             _marker: PhantomData,
         }
     }
@@ -55,16 +55,16 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
             .ok_or_else(|| DatabaseError::Other(format!("Column family not found: {}", T::NAME)))
     }
 
-    /// Get trie cursor factory
-    pub fn trie_cursor_factory(&self) -> &RocksTrieCursorFactory {
-        &self.trie_cursor_factory
+    /// Create a trie cursor factory for this transaction
+    pub fn trie_cursor_factory(&self) -> RocksTrieCursorFactory {
+        RocksTrieCursorFactory::new(self)
     }
 }
 
 // Implement read-only transaction
 impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
-    type Cursor<T: Table> = super::cursor::RocksCursor<'_, T, WRITE>;
-    type DupCursor<T: DupSort> = super::cursor::RocksDupCursor<'_, T, WRITE>;
+    type Cursor<T: Table> = super::cursor::RocksCursor<T, WRITE>;
+    type DupCursor<T: DupSort> = super::cursor::RocksDupCursor<T, WRITE>;
 
     fn get<T: Table>(&self, key: T::Key) -> Result<Option<T::Value>, DatabaseError> {
         let cf = self.get_cf::<T>()?;
@@ -122,8 +122,8 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
 
 // Implement write transaction capabilities
 impl DbTxMut for RocksTransaction<true> {
-    type CursorMut<T: Table> = RocksCursor<'_, T, true>;
-    type DupCursorMut<T: DupSort> = RocksDupCursor<'_, T, true>;
+    type CursorMut<T: Table> = RocksCursor<T, true>;
+    type DupCursorMut<T: DupSort> = RocksDupCursor<T, true>;
 
     fn put<T: Table>(&self, key: T::Key, value: T::Value) -> Result<(), DatabaseError> {
         let cf = self.get_cf::<T>()?;

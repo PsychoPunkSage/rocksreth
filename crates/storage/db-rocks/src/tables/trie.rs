@@ -1,11 +1,13 @@
+use super::codecs::trie::StorageTrieKey;
 use crate::tables::codecs::trie::TrieNodeCodec;
 use crate::tables::TableConfig;
 use alloy_primitives::B256;
+// use reth_db_api::table::DupSort;
 use reth_db_api::table::Table;
 use reth_primitives::Account;
+use reth_trie::{BranchNodeCompact, Nibbles}; // For encoding/decoding
+use reth_trie_common::{StoredNibbles, StoredNibblesSubKey};
 use rocksdb::{ColumnFamilyDescriptor, Options};
-
-use super::codecs::trie::StorageTrieKey;
 
 /// Table storing the trie nodes.
 #[derive(Debug)]
@@ -37,8 +39,26 @@ pub struct StorageTrieTable;
 
 impl Table for StorageTrieTable {
     const NAME: &'static str = "storage_trie";
-    const DUPSORT: bool = false;
+    const DUPSORT: bool = true;
 
-    type Key = StorageTrieKey; // (Account Hash, Storage Hash)
-    type Value = B256; // Storage Value
+    // type Value = B256; // Storage Value
+    // type Key = StorageTrieKey; // (Account Hash, Storage Hash)
+
+    type Key = B256; // (Account Hash, Storage Hash)
+    type Value = StorageTrieEntry; // Storage Value
+}
+
+// Define StorageTrieEntry
+#[derive(Debug, Clone)]
+pub struct StorageTrieEntry {
+    pub nibbles: StoredNibblesSubKey,
+    pub node: BranchNodeCompact,
+}
+
+impl DupSort for StorageTrieTable {
+    type SubKey = StoredNibblesSubKey;
+
+    fn compose_key(key: &B256, _subkey: &StoredNibblesSubKey) -> Self::Key {
+        *key // Now this works because Key is B256
+    }
 }

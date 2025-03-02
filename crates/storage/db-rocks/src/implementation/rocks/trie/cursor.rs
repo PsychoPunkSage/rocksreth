@@ -1,20 +1,22 @@
+use super::super::dupsort::DupSortHelper;
+use crate::implementation::rocks::cursor::RocksCursor;
 use crate::tables::trie::{AccountTrieTable, StorageTrieTable, TrieTable};
 use crate::RocksTransaction;
 use alloy_primitives::B256;
-use reth_db::cursor;
-use reth_db::transaction::DbTx;
+// use reth_db::transaction::DbTx;
+// reth_trie_db::trie_cursor::TrieCursor;
+use reth_db_api::DatabaseError;
 use reth_db_api::{cursor::DbCursorRO, DatabaseError};
 use reth_db_api::{Decode, Encode};
-use reth_primitives::Account;
+// use reth_primitives::Account;
 use reth_trie::{
     hashed_cursor::{HashedCursor, HashedCursorFactory},
     trie_cursor::{TrieCursor, TrieCursorFactory},
 };
 use reth_trie::{BranchNodeCompact, Nibbles}; // For encoding/decoding
 use reth_trie_common::{StoredNibbles, StoredNibblesSubKey};
-use reth_trie_db::trie_cursor::TrieCursor;
+// use reth_trie_db::trie_cursor::TrieCursor;
 use rocksdb::{ColumnFamily, Direction, IteratorMode, ReadOptions, DB};
-use std::sync::Arc;
 
 /// RocksDB implementation of account trie cursor
 pub struct RocksAccountTrieCursor<'tx> {
@@ -23,11 +25,10 @@ pub struct RocksAccountTrieCursor<'tx> {
     /// Current cursor position
     current_key: Option<Nibbles>,
 }
-
 /// RocksDB implementation of storage trie cursor
 pub struct RocksStorageTrieCursor<'tx> {
     /// Transaction reference
-    tx: &'tx RocksTransaction<false>,
+    cursor: Box<dyn DbCursorRO<StorageTrieTable> + 'tx>,
     /// Account hash for storage trie
     hashed_address: B256,
     /// Current cursor position
@@ -41,8 +42,16 @@ impl<'tx> RocksAccountTrieCursor<'tx> {
 }
 
 impl<'tx> RocksStorageTrieCursor<'tx> {
-    pub fn new(tx: &'tx RocksTransaction<false>, hashed_address: B256) -> Self {
-        Self { tx, hashed_address, current_key: None }
+    pub fn new(cursor: Box<dyn DbCursorRO<StorageTrieTable> + 'tx>, hashed_address: B256) -> Self {
+        Self { cursor, hashed_address, current_key: None }
+    }
+
+    // Helper method to convert TrieNodeValue to BranchNodeCompact
+    fn value_to_branch_node(value: TrieNodeValue) -> Result<BranchNodeCompact, DatabaseError> {
+        // Placeholder implementation - need to implement this based on your specific data model
+        // This might involve RLP decoding or other transformations
+        let branch_node = BranchNodeCompact::from_hash(value.node);
+        Ok(branch_node)
     }
 }
 
@@ -52,10 +61,14 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
         key: Nibbles,
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
         // create cursor via txn
-        let mut cursor = self.tx.cursor_read::<AccountTrieTable>()?;
+        let mut cursor: RocksCursor<AccountTrieTable, false> =
+            self.tx.cursor_read::<AccountTrieTable>()?;
 
-        // Use seek_extract with StoredNibble
-        let res = cursor.seek_exact(StoredNibbles(key.clone()))?.map(|val| (val.0 .0, val.1))?;
+        let res = cursor.seek_exact(StoredNibbles(key.clone()))?.map(|val| {
+            // Create a new Nibbles from the bytes of val.0
+            let nibbles = Nibbles::from_nibbles(val.0.as_slice());
+            (nibbles, val.1)
+        });
 
         if let Some((found_key, _)) = &res {
             self.current_key = Some(found_key.clone());
@@ -71,12 +84,17 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
         key: Nibbles,
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
         // Create cursor from txn
-        let mut cursor = self.tx.cursor_read::<AccountTrieTable>()?;
+        let mut cursor: RocksCursor<AccountTrieTable, false> =
+            self.tx.cursor_read::<AccountTrieTable>()?;
 
         // Use seek with StoredNibbles
-        let res = cursor.seek(StoredNibbles(key))?.map(|val| (val.0 .0, val.1));
+        let res = cursor.seek(StoredNibbles(key))?.map(|val| {
+            // Create a new Nibbles from the bytes of val.0
+            let nibbles = Nibbles::from_nibbles(val.0.as_slice());
+            (nibbles, val.1)
+        });
 
-        if let Some((found_key, _)) = &result {
+        if let Some((found_key, _)) = &res {
             self.current_key = Some(found_key.clone());
         } else {
             self.current_key = None;
@@ -87,7 +105,8 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
 
     fn next(&mut self) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
         // Create cursor from txn
-        let mut cursor = self.tx.cursor_read::<AccountTrieTable>()?;
+        let mut cursor: RocksCursor<AccountTrieTable, false> =
+            self.tx.cursor_read::<AccountTrieTable>()?;
 
         // if have current key ? Position cursor
         if let Some(current) = &self.current_key {
@@ -104,7 +123,11 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
         };
 
         // Get current entry after positioning
-        let res = cursor.current()?.map(|val| (val.0 .0, val.1))?;
+        let res = cursor.current()?.map(|val| {
+            // Create a new Nibbles from the bytes of val.0
+            let nibbles = Nibbles::from_nibbles(val.0.as_slice());
+            (nibbles, val.1)
+        });
 
         if let Some((found_key, _)) = &res {
             self.current_key = Some(found_key.clone());
@@ -125,15 +148,17 @@ impl<'tx> TrieCursor for RocksStorageTrieCursor<'tx> {
         &mut self,
         key: Nibbles,
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
-        let mut cursor = self.tx.cursor_dup_read::<StorageTrieTable>()?;
+        // Create subkey from nibbles
+        let subkey = StoredNibbles(key.clone());
 
-        // Convert to the correct type
-        let subkey = StoredNibblesSubKey(key.clone());
+        // Create composite key using DupSortHelper
+        let composite_key =
+            DupSortHelper::create_composite_key::<StorageTrieTable>(&self.hashed_address, &subkey)?;
 
-        // Use seek_by_key_subkey
-        if let Some(entry) = cursor.seek_by_key_subkey(self.hashed_address, subkey)? {
-            self.current_key = Some(key.clone());
-            return Ok(Some((key, entry.node)));
+        // Use seek_exact with the composite key
+        if let Some((_, value)) = self.cursor.seek_exact(composite_key)? {
+            self.current_key = Some(value.nibbles.0.clone());
+            return Ok(Some((value.nibbles.0, Self::value_to_branch_node(value)?)));
         }
 
         self.current_key = None;
@@ -144,44 +169,38 @@ impl<'tx> TrieCursor for RocksStorageTrieCursor<'tx> {
         &mut self,
         key: Nibbles,
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
-        // Create cursor via transaction
-        let mut cursor = self.tx.cursor_dup_read::<StorageTrieTable>()?;
+        // Create prefix for scanning all entries with this account hash
+        let prefix = DupSortHelper::create_prefix::<StorageTrieTable>(&self.hashed_address)?;
 
-        // Use seek_by_key_subkey with hashed_address and StoredNibblesSubKey
-        let result = cursor
-            .seek_by_key_subkey(self.hashed_address, StoredNibblesSubKey(key))?
-            .map(|value| (value.nibbles.0, value.node));
-
-        if let Some((found_key, _)) = &result {
-            self.current_key = Some(found_key.clone());
-        } else {
-            self.current_key = None;
+        // Seek to the first entry with this prefix
+        if let Some((_, value)) = self.cursor.seek(prefix)? {
+            // Check if the found key has a prefix matching our search key
+            let found_key = &value.nibbles.0;
+            if found_key.has_prefix(&key) {
+                self.current_key = Some(found_key.clone());
+                return Ok(Some((found_key.clone(), Self::value_to_branch_node(value)?)));
+            }
         }
 
-        Ok(result)
+        self.current_key = None;
+        Ok(None)
     }
 
     fn next(&mut self) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
-        // Create cursor via transaction
-        let mut cursor = self.tx.cursor_dup_read::<StorageTrieTable>()?;
+        // Create prefix for scanning all entries with this account hash
+        let prefix = DupSortHelper::create_prefix::<StorageTrieTable>(&self.hashed_address)?;
 
-        // Position cursor if we have a current key
-        if let Some(current) = &self.current_key {
-            cursor.seek_by_key_subkey(self.hashed_address, StoredNibblesSubKey(current.clone()))?;
-        } else {
-            cursor.seek_by_key(self.hashed_address)?;
+        // Move to the next entry
+        if let Some((composite_key, value)) = self.cursor.next()? {
+            // Check if the key still has our prefix
+            if composite_key.starts_with(&prefix) {
+                self.current_key = Some(value.nibbles.0.clone());
+                return Ok(Some((value.nibbles.0, Self::value_to_branch_node(value)?)));
+            }
         }
 
-        // Move to next entry with same key (duplicate)
-        let result = cursor.next_dup()?.map(|(_, v)| (v.nibbles.0, v.node));
-
-        if let Some((found_key, _)) = &result {
-            self.current_key = Some(found_key.clone());
-        } else {
-            self.current_key = None;
-        }
-
-        Ok(result)
+        self.current_key = None;
+        Ok(None)
     }
 
     fn current(&mut self) -> Result<Option<Nibbles>, DatabaseError> {

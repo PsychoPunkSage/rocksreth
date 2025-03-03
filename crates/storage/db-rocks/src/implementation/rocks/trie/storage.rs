@@ -3,6 +3,7 @@ use crate::{
     tables::trie::{AccountTrieTable, StorageTrieTable, TrieTable},
 };
 use alloy_primitives::{Address, B256};
+use eyre::Ok;
 use reth_db_api::{transaction::DbTxMut, DatabaseError};
 use reth_execution_errors::StateRootError;
 use reth_primitives::Account;
@@ -43,8 +44,16 @@ impl<'a> DatabaseStateRoot<'a, RocksTransaction<false>> for RocksTransaction<fal
         tx: &'a RocksTransaction<false>,
         range: std::ops::RangeInclusive<u64>,
     ) -> Result<B256, reth_execution_errors::StateRootError> {
-        // Computes root for the given block range
-        todo!("Implement incremental root calculation")
+        // Create factory from transaction
+        let trie_factory = tx.trie_cursor_factory();
+        let hashed_factory = tx.hashed_cursor_factory(); // NEED TO IMPLEMENT
+
+        // Use the trie-db implementation with your factories
+        let commitment = StateCommitment::new(trie_factory, hashed_factory);
+        // *** NO NEW METHOD
+        let root = commitment.incremental_root(range)?;
+        /// *** wth??
+        Ok(root) // *** Need to return correct type
     }
 
     fn incremental_root_with_updates(

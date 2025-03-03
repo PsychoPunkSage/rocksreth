@@ -1,3 +1,5 @@
+use eyre::Ok;
+use reth_db_api::table::{Decode, Encode};
 use reth_db_api::{
     cursor::{
         DbCursorRO, DbCursorRW, DbDupCursorRO, DbDupCursorRW, DupWalker, RangeWalker,
@@ -9,40 +11,57 @@ use reth_db_api::{
 use rocksdb::{ColumnFamily, Direction, IteratorMode, ReadOptions, DB};
 use std::ops::Bound;
 use std::ops::RangeBounds;
+use std::result::Result::Ok;
 use std::sync::Arc;
 
 /// RocksDB cursor implementation
-pub struct RocksCursor<'a, T: Table, const WRITE: bool> {
+pub struct RocksCursor<T: Table, const WRITE: bool> {
     db: Arc<DB>,
     cf: Arc<ColumnFamily>,
-    iter: rocksdb::DBIteratorWithThreadMode<'a, DB>,
+    // Use 'static / Box<dyn ...> to avoid external lifetime parameters
+    // iter: Box<dyn Iterator<Item = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>> + Send + Sync>,
+    iter: rocksdb::DBIteratorWithThreadMode<'static, DB>,
     _marker: std::marker::PhantomData<T>,
 }
 
-impl<T: Table, const WRITE: bool> RocksCursor<'_, T, WRITE> {
+impl<T: Table, const WRITE: bool> RocksCursor<T, WRITE> {
     pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
         let mut read_opts = ReadOptions::default();
         read_opts.set_verify_checksums(false);
-        let iter = db.as_ref().iterator_cf_opt(&cf, read_opts, IteratorMode::Start);
+        let iter = db.as_ref().iterator_cf_opt(&*cf, read_opts, IteratorMode::Start);
 
         Ok(Self { db, cf, iter, _marker: std::marker::PhantomData })
     }
 }
 
-impl<T: Table, const WRITE: bool> DbCursorRO<T> for RocksCursor<'_, T, WRITE> {
+impl<T: Table, const WRITE: bool> DbCursorRO<T> for RocksCursor<T, WRITE> {
     fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.iter.seek_to_first();
+        // Reinitialize the iterator to start at the beginning
+        self.iter = self.db.as_ref().iterator_cf_opt(
+            &*self.cf,
+            ReadOptions::default(),
+            IteratorMode::Start,
+        );
+
         match self.iter.next() {
             Some(Ok((k, v))) => Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?))),
+            // Some(Ok((kv, vk))) => Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?))),
             None => Ok(None),
-            Some(Err(e)) => Err(DatabaseError::Backend(e.to_string())),
+            Some(Err(e)) => Err(DatabaseError::Other(e.to_string())),
         }
     }
 
     fn seek_exact(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         let key_bytes = key.encode();
-        if let Some(Ok((k, v))) = self.iter.seek(key_bytes) {
-            if k == key.encode() {
+        self.iter = self.db.as_ref().iterator_cf_opt(
+            &*self.cf,
+            ReadOptions::default(),
+            IteratorMode::From(&key_bytes, Direction::Forward),
+        );
+
+        // Now check if the current item matches the key
+        if let Some(Ok((k, v))) = self.iter.next() {
+            if k == key_bytes {
                 return Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?)));
             }
         }
@@ -50,9 +69,20 @@ impl<T: Table, const WRITE: bool> DbCursorRO<T> for RocksCursor<'_, T, WRITE> {
     }
 
     fn seek(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        if let Some(Ok((k, v))) = self.iter.seek(key.encode()) {
+        let key_bytes = key.encode();
+
+        // Reset the iterators to seek to the key
+        self.iter = self.db.as_ref().iterator_cf_opt(
+            &*self.cf,
+            ReadOptions::default(),
+            IteratorMode::From(&key_bytes, Direction::Forward),
+        );
+
+        // Get the 1st item that is >= key
+        if let Some(Ok((k, v))) = self.iter.next() {
             return Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?)));
         }
+
         Ok(None)
     }
 
@@ -60,16 +90,43 @@ impl<T: Table, const WRITE: bool> DbCursorRO<T> for RocksCursor<'_, T, WRITE> {
         match self.iter.next() {
             Some(Ok((k, v))) => Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?))),
             None => Ok(None),
-            Some(Err(e)) => Err(DatabaseError::Backend(e.to_string())),
+            Some(Err(e)) => Err(DatabaseError::Other(e.to_string())),
         }
     }
 
     fn prev(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.iter.prev();
+        let current_key =
+            if let Some(Ok((k, _))) = self.iter.item() { Some(k.clone()) } else { None };
+
+        match current_key {
+            Some(key) => {
+                self.iter = self.db.as_ref().iterator_cf_opt(
+                    &*self.cf,
+                    ReadOptions::default(),
+                    IteratorMode::From(&key, Direction::Reverse),
+                );
+            }
+
+            None => {
+                // If no current key found: Position at the end and try to get the last entry
+                self.iter = self.db.as_ref().iterator_cf_opt(
+                    &*self.cf,
+                    ReadOptions::default(),
+                    IteratorMode::End,
+                );
+
+                match self.iter.next() {
+                    Some(Ok((k, v))) => Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)))),
+                    None => Ok(None),
+                    Some(Err(e)) => Err(DatabaseError::Other(e.to_string())),
+                }
+            }
+        }
+
         match self.iter.next() {
             Some(Ok((k, v))) => Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?))),
             None => Ok(None),
-            Some(Err(e)) => Err(DatabaseError::Backend(e.to_string())),
+            Some(Err(e)) => Err(DatabaseError::Other(e.to_string())),
         }
     }
 
@@ -78,7 +135,7 @@ impl<T: Table, const WRITE: bool> DbCursorRO<T> for RocksCursor<'_, T, WRITE> {
         match self.iter.next() {
             Some(Ok((k, v))) => Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?))),
             None => Ok(None),
-            Some(Err(e)) => Err(DatabaseError::Backend(e.to_string())),
+            Some(Err(e)) => Err(DatabaseError::Other(e.to_string())),
         }
     }
 
@@ -86,7 +143,7 @@ impl<T: Table, const WRITE: bool> DbCursorRO<T> for RocksCursor<'_, T, WRITE> {
         match self.iter.item() {
             Some(Ok((k, v))) => Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?))),
             None => Ok(None),
-            Some(Err(e)) => Err(DatabaseError::Backend(e.to_string())),
+            Some(Err(e)) => Err(DatabaseError::Other(e.to_string())),
         }
     }
 
@@ -139,13 +196,13 @@ impl<T: Table, const WRITE: bool> DbCursorRO<T> for RocksCursor<'_, T, WRITE> {
     }
 }
 
-impl<T: Table> DbCursorRW<T> for RocksCursor<'_, T, true> {
+impl<T: Table> DbCursorRW<T> for RocksCursor<T, true> {
     fn upsert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
         let key_bytes = key.encode();
         let value_bytes = value.encode();
         self.db
             .put_cf(&self.cf, key_bytes, value_bytes)
-            .map_err(|e| DatabaseError::Backend(e.to_string()))
+            .map_err(|e| DatabaseError::Other(e.to_string()))
     }
 
     fn insert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
@@ -163,25 +220,25 @@ impl<T: Table> DbCursorRW<T> for RocksCursor<'_, T, true> {
         if let Some((key, _)) = self.current()? {
             self.db
                 .delete_cf(&self.cf, key.encode())
-                .map_err(|e| DatabaseError::Backend(e.to_string()))?;
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
         }
         Ok(())
     }
 }
 
 /// RocksDB duplicate cursor implementation
-pub struct RocksDupCursor<'a, T: DupSort, const WRITE: bool> {
-    inner: RocksCursor<'a, T, WRITE>,
+pub struct RocksDupCursor<T: DupSort, const WRITE: bool> {
+    inner: RocksCursor<T, WRITE>,
     current_key: Option<T::Key>,
 }
 
-impl<T: DupSort, const WRITE: bool> RocksDupCursor<'_, T, WRITE> {
+impl<T: DupSort, const WRITE: bool> RocksDupCursor<T, WRITE> {
     pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
         Ok(Self { inner: RocksCursor::new(db, cf)?, current_key: None })
     }
 }
 
-impl<T: DupSort, const WRITE: bool> DbCursorRO<T> for RocksDupCursor<'_, T, WRITE> {
+impl<T: DupSort, const WRITE: bool> DbCursorRO<T> for RocksDupCursor<T, WRITE> {
     fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         let result = self.inner.first()?;
         if let Some((key, _)) = &result {
@@ -285,7 +342,7 @@ impl<T: DupSort, const WRITE: bool> DbCursorRO<T> for RocksDupCursor<'_, T, WRIT
     }
 }
 
-impl<T: DupSort> DbDupCursorRO<T> for RocksDupCursor<'_, T, true> {
+impl<T: DupSort, const WRITE: bool> DbDupCursorRO<T> for RocksDupCursor<T, WRITE> {
     fn next_dup(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         if let Some(current_key) = &self.current_key {
             let next = self.inner.next()?;
@@ -345,7 +402,7 @@ impl<T: DupSort> DbDupCursorRO<T> for RocksDupCursor<'_, T, true> {
     }
 }
 
-impl<T: DupSort> DbCursorRW<T> for RocksDupCursor<'_, T, true> {
+impl<T: DupSort> DbCursorRW<T> for RocksDupCursor<T, true> {
     fn upsert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
         self.inner.upsert(key, value)
     }
@@ -363,7 +420,7 @@ impl<T: DupSort> DbCursorRW<T> for RocksDupCursor<'_, T, true> {
     }
 }
 
-impl<T: DupSort> DbDupCursorRW<T> for RocksDupCursor<'_, T, true> {
+impl<T: DupSort> DbDupCursorRW<T> for RocksDupCursor<T, true> {
     fn delete_current_duplicates(&mut self) -> Result<(), DatabaseError> {
         if let Some(current_key) = &self.current_key {
             // Keep track of the current key while deleting duplicates

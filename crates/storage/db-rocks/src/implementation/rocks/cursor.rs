@@ -273,7 +273,7 @@ where
 
     fn insert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
         if self.seek_exact(key.clone())?.is_some() {
-            return Err(DatabaseError::KeyExists);
+            return Err(DatabaseError::Other("Key already exists".to_string()));
         }
         self.upsert(key, value)
     }
@@ -298,23 +298,30 @@ pub struct RocksDupCursor<T: DupSort, const WRITE: bool> {
     current_key: Option<T::Key>,
 }
 
-impl<T: DupSort, const WRITE: bool> RocksDupCursor<T, WRITE> {
+impl<T: DupSort, const WRITE: bool> RocksDupCursor<T, WRITE>
+where
+    T::Key: Encode + Decode,
+    T::Value: Encode + Decode,
+    T::SubKey: Encode + Decode,
+{
     pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
         Ok(Self { inner: RocksCursor::new(db, cf)?, current_key: None })
     }
 }
 
-impl<T: DupSort, const WRITE: bool> DbCursorRO<T> for RocksDupCursor<T, WRITE> {
+impl<T: DupSort, const WRITE: bool> DbCursorRO<T> for RocksDupCursor<T, WRITE>
+where
+    T::Key: Encode + Decode + Clone,
+    T::Value: Encode + Decode,
+    T::SubKey: Encode + Decode,
+{
     fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         let result = self.inner.first()?;
         if let Some((key, _)) = &result {
-            self.current_key = Some(key.clone());
+            self.current_key = Some(key);
         }
         Ok(result)
     }
-
-    // Implement other required methods similar to RocksCursor...
-    // Copy implementations from RocksCursor but maintain current_key state
 
     fn seek_exact(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         let result = self.inner.seek_exact(key.clone())?;
@@ -365,7 +372,14 @@ impl<T: DupSort, const WRITE: bool> DbCursorRO<T> for RocksDupCursor<T, WRITE> {
         Self: Sized,
     {
         let start = if let Some(key) = start_key { self.seek(key)? } else { self.first()? };
-        Ok(Walker::new(self, Ok(start)))
+
+        // Convert to expected type for Walker::new
+        let iter_pair_result = match start {
+            Some(val) => Some(Ok(val)),
+            None => None,
+        };
+
+        Ok(Walker::new(self, iter_pair_result))
     }
 
     fn walk_range(
@@ -393,7 +407,13 @@ impl<T: DupSort, const WRITE: bool> DbCursorRO<T> for RocksDupCursor<T, WRITE> {
             Bound::Unbounded => Bound::Unbounded,
         };
 
-        Ok(RangeWalker::new(self, Ok(start), end_bound))
+        // Convert to expected type for RangeWalker::new
+        let iter_pair_result = match start {
+            Some(val) => Some(Ok(val)),
+            None => None,
+        };
+
+        Ok(RangeWalker::new(self, iter_pair_result, end_bound))
     }
 
     fn walk_back(

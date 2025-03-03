@@ -1,5 +1,3 @@
-// src/implementation/rocks/dupsort.rs
-
 use bytes::{BufMut, BytesMut};
 use reth_db_api::{
     table::{DupSort, Encode},

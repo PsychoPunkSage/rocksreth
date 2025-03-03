@@ -1,5 +1,5 @@
-use crate::implementation::rocks::tx::RocksTransaction;
 use crate::tables::utils::TableUtils;
+use core::fmt;
 use parking_lot::RwLock;
 use reth_db_api::{
     transaction::{DbTx, DbTxMut},
@@ -50,7 +50,6 @@ impl Default for RocksDBConfig {
 }
 
 /// RocksDB instance wrapper
-#[derive(Debug)]
 pub struct RocksDB {
     /// The RocksDB instance
     db: Arc<DB>,
@@ -60,6 +59,17 @@ pub struct RocksDB {
     write_opts: WriteOptions,
     /// Read options
     read_opts: ReadOptions,
+}
+
+impl fmt::Debug for RocksDB {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RocksDB")
+            .field("db", &self.db)
+            .field("config", &self.config)
+            .field("write_opts", &"<WriteOptions>")
+            .field("read_opts", &"<ReadOptions>")
+            .finish()
+    }
 }
 
 impl RocksDB {
@@ -76,8 +86,8 @@ impl RocksDB {
         opts.set_use_direct_reads(config.use_direct_io);
 
         // Setup block cache
-        let cache = rocksdb::Cache::new_lru_cache(config.block_cache_size)?;
-        opts.set_block_cache(&cache);
+        let cache = rocksdb::Cache::new_lru_cache(config.block_cache_size);
+        opts.set_blob_cache(&cache);
 
         // Get column family descriptors
         let cf_descriptors = if path.exists() {
@@ -97,6 +107,14 @@ impl RocksDB {
         let read_opts = ReadOptions::default();
 
         Ok(Self { db: Arc::new(db), config, write_opts, read_opts })
+    }
+
+    /// Open a RocksDB instance at the given path with default configuration
+    pub fn open_at_path(path: &Path, create_if_missing: bool) -> Result<Self, DatabaseError> {
+        let mut config = RocksDBConfig::default();
+        config.path = path.to_string_lossy().to_string();
+        config.create_if_missing = create_if_missing;
+        Self::open(config)
     }
 
     /// Create read-only transaction
@@ -130,8 +148,10 @@ impl RocksDB {
 
         for cf_name in TableUtils::get_expected_table_names() {
             if let Some(cf) = self.db.cf_handle(&cf_name) {
-                if let Some(size) =
-                    self.db.property_int_value_cf(&cf, "rocksdb.estimate-live-data-size")?
+                if let Some(size) = self
+                    .db
+                    .property_int_value_cf(&cf, "rocksdb.estimate-live-data-size")
+                    .map_err(|e| DatabaseError::Other(format!("RocksDB error: {}", e)))?
                 {
                     sizes.push((cf_name, size));
                 }

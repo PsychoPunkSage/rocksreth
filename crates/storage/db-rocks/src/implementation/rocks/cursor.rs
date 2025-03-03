@@ -1,4 +1,3 @@
-use eyre::Ok;
 use reth_db_api::table::{Decode, Encode};
 use reth_db_api::{
     cursor::{
@@ -29,6 +28,7 @@ impl<T: Table, const WRITE: bool> RocksCursor<T, WRITE> {
         let mut read_opts = ReadOptions::default();
         read_opts.set_verify_checksums(false);
         let iter = db.as_ref().iterator_cf_opt(&*cf, read_opts, IteratorMode::Start);
+        // .map_err(|e| DatabaseError::Other(e.to_string())); // *** BIG ISSUE
 
         Ok(Self { db, cf, iter, _marker: std::marker::PhantomData })
     }

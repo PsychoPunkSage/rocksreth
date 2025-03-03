@@ -1,21 +1,15 @@
 use super::super::dupsort::DupSortHelper;
 use crate::implementation::rocks::cursor::RocksCursor;
-use crate::tables::trie::{AccountTrieTable, StorageTrieTable, TrieTable};
+use crate::tables::trie::{AccountTrieTable, StorageTrieTable, TrieNodeValue, TrieTable};
 use crate::RocksTransaction;
 use alloy_primitives::B256;
-// use reth_db::transaction::DbTx;
-// reth_trie_db::trie_cursor::TrieCursor;
-use reth_db_api::DatabaseError;
 use reth_db_api::{cursor::DbCursorRO, DatabaseError};
-use reth_db_api::{Decode, Encode};
-// use reth_primitives::Account;
 use reth_trie::{
     hashed_cursor::{HashedCursor, HashedCursorFactory},
     trie_cursor::{TrieCursor, TrieCursorFactory},
 };
 use reth_trie::{BranchNodeCompact, Nibbles}; // For encoding/decoding
 use reth_trie_common::{StoredNibbles, StoredNibblesSubKey};
-// use reth_trie_db::trie_cursor::TrieCursor;
 use rocksdb::{ColumnFamily, Direction, IteratorMode, ReadOptions, DB};
 
 /// RocksDB implementation of account trie cursor
@@ -28,7 +22,9 @@ pub struct RocksAccountTrieCursor<'tx> {
 /// RocksDB implementation of storage trie cursor
 pub struct RocksStorageTrieCursor<'tx> {
     /// Transaction reference
-    cursor: Box<dyn DbCursorRO<StorageTrieTable> + 'tx>,
+    // *** [Temporary SOln] Need to see How DbCursorRO in rest of the REPO
+    // *** cursor: RocksDupCursor<StorageTrieTable, false>,  // Or whatever the concrete type is
+    cursor: Box<dyn DbCursorRO<StorageTrieTable> + Send + Sync + 'tx>, // *** [Temporary SOln] Need to see How DbCursorRO in rest of the REPO
     /// Account hash for storage trie
     hashed_address: B256,
     /// Current cursor position
@@ -64,11 +60,7 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
         let mut cursor: RocksCursor<AccountTrieTable, false> =
             self.tx.cursor_read::<AccountTrieTable>()?;
 
-        let res = cursor.seek_exact(StoredNibbles(key.clone()))?.map(|val| {
-            // Create a new Nibbles from the bytes of val.0
-            let nibbles = Nibbles::from_nibbles(val.0.as_slice());
-            (nibbles, val.1)
-        });
+        let res = cursor.seek_exact(StoredNibbles(key.clone()))?.map(|val| (val.0 .0, val.1));
 
         if let Some((found_key, _)) = &res {
             self.current_key = Some(found_key.clone());
@@ -88,11 +80,7 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
             self.tx.cursor_read::<AccountTrieTable>()?;
 
         // Use seek with StoredNibbles
-        let res = cursor.seek(StoredNibbles(key))?.map(|val| {
-            // Create a new Nibbles from the bytes of val.0
-            let nibbles = Nibbles::from_nibbles(val.0.as_slice());
-            (nibbles, val.1)
-        });
+        let res = cursor.seek(StoredNibbles(key))?.map(|val| (val.0 .0, val.1));
 
         if let Some((found_key, _)) = &res {
             self.current_key = Some(found_key.clone());
@@ -100,7 +88,7 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
             self.current_key = None;
         }
 
-        Ok(result)
+        Ok(res)
     }
 
     fn next(&mut self) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
@@ -123,11 +111,7 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
         };
 
         // Get current entry after positioning
-        let res = cursor.current()?.map(|val| {
-            // Create a new Nibbles from the bytes of val.0
-            let nibbles = Nibbles::from_nibbles(val.0.as_slice());
-            (nibbles, val.1)
-        });
+        let res = cursor.current()?.map(|val| (val.0 .0, val.1));
 
         if let Some((found_key, _)) = &res {
             self.current_key = Some(found_key.clone());
@@ -139,7 +123,7 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
     }
 
     fn current(&mut self) -> Result<Option<Nibbles>, DatabaseError> {
-        Ok(self.current_key)
+        Ok(self.current_key.clone())
     }
 }
 
@@ -209,7 +193,7 @@ impl<'tx> TrieCursor for RocksStorageTrieCursor<'tx> {
 }
 
 /// Factory for creating trie cursors
-pub struct RocksTrieCursorFactory {
+pub struct RocksTrieCursorFactory<'tx> {
     /// Transaction reference - provides context for all created cursors
     tx: &'tx RocksTransaction<false>,
 }
@@ -221,9 +205,9 @@ impl<'tx> RocksTrieCursorFactory<'tx> {
     }
 }
 
-impl TrieCursorFactory for RocksTrieCursorFactory {
-    type AccountTrieCursor = RocksTrieCursor<'tx, AccountTrieTable>;
-    type StorageTrieCursor = RocksTrieCursor<'tx, StorageTrieTable>;
+impl<'tx> TrieCursorFactory for RocksTrieCursorFactory<'tx> {
+    type AccountTrieCursor<'tx> = RocksAccountTrieCursor<'tx>;
+    type StorageTrieCursor<'tx> = RocksStorageTrieCursor<'tx>; // *** Need internal lifetime managers
 
     fn account_trie_cursor(&self) -> Result<Self::AccountTrieCursor, DatabaseError> {
         Ok(RocksTrieCursor::new(self.tx))

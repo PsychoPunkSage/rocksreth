@@ -1,11 +1,9 @@
 use crate::implementation::rocks::cursor::{RocksCursor, RocksDupCursor};
 use crate::implementation::rocks::trie::RocksTrieCursorFactory;
-// use parking_lot::lock_api::Mutex;
-// use crate::implementation::Options;
 use parking_lot::Mutex;
 use reth_db_api::{
     cursor::{DbCursorRO, DbCursorRW, DbDupCursorRO, DbDupCursorRW},
-    table::{DupSort, Table},
+    table::{Compress, Decode, Decompress, DupSort, Encode, Table},
     transaction::{DbTx, DbTxMut},
     DatabaseError,
 };
@@ -16,7 +14,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 /// Generic transaction type for RocksDB
-#[derive(Debug)]
 pub struct RocksTransaction<const WRITE: bool> {
     /// Reference to DB
     db: Arc<DB>,
@@ -30,6 +27,17 @@ pub struct RocksTransaction<const WRITE: bool> {
     // trie_cursor_factory: RocksTrieCursorFactory,
     /// Marker for transaction type
     _marker: PhantomData<bool>,
+}
+
+impl<const WRITE: bool> std::fmt::Debug for RocksTransaction<WRITE> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RocksTransaction")
+            .field("db", &self.db)
+            .field("batch", &format!("<WriteOpts>"))
+            .field("read_opts", &format!("<ReadOptions>"))
+            .field("_marker", &self._marker)
+            .finish()
+    }
 }
 
 impl<const WRITE: bool> RocksTransaction<WRITE> {
@@ -49,14 +57,18 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
     }
 
     /// Get the column family handle for a table
-    fn get_cf<T: Table>(&self) -> Result<&rocksdb::ColumnFamily, DatabaseError> {
+    fn get_cf<T: Table>(&self) -> Result<Arc<rocksdb::ColumnFamily>, DatabaseError> {
         self.db
             .cf_handle(T::NAME)
             .ok_or_else(|| DatabaseError::Other(format!("Column family not found: {}", T::NAME)))
     }
 
     /// Create a trie cursor factory for this transaction
-    pub fn trie_cursor_factory(&self) -> RocksTrieCursorFactory {
+    pub fn trie_cursor_factory(&self) -> RocksTrieCursorFactory
+    where
+        Self: Sized,
+        WRITE: bool,
+    {
         RocksTrieCursorFactory::new(self)
     }
 }
@@ -70,8 +82,15 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
         let cf = self.get_cf::<T>()?;
         let key_bytes = key.encode();
 
-        match self.db.get_cf_opt(cf, key_bytes, &self.read_opts)? {
-            Some(value_bytes) => Ok(Some(T::Value::decode(&value_bytes)?)),
+        match self
+            .db
+            .get_cf_opt(&cf, key_bytes, &self.read_opts)
+            .map_err(|e| DatabaseError::Other(format!("RocksDB Error: {}", e)))?
+        {
+            Some(value_bytes) => match T::Value::decode(&value_bytes) {
+                Ok(value) => Ok(Some(value)),
+                Err(e) => Err(e),
+            },
             None => Ok(None),
         }
     }
@@ -82,18 +101,27 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
     ) -> Result<Option<T::Value>, DatabaseError> {
         let cf = self.get_cf::<T>()?;
 
-        match self.db.get_cf_opt(cf, key, &self.read_opts)? {
-            Some(value_bytes) => Ok(Some(T::Value::decode(&value_bytes)?)),
+        match self
+            .db
+            .get_cf_opt(&cf, key, &self.read_opts)
+            .map_err(|e| DatabaseError::Other(format!("RocksDB error: {}", e)))?
+        {
+            Some(value_bytes) => match T::Value::decode(&value_bytes) {
+                Ok(val) => Ok(Some(val)),
+                Err(e) => Err(e),
+            },
             None => Ok(None),
         }
     }
 
     fn cursor_read<T: Table>(&self) -> Result<Self::Cursor<T>, DatabaseError> {
         super::cursor::RocksCursor::new(self.db.clone(), self.get_cf::<T>()?.clone())
+        // *** cloen needed??
     }
 
     fn cursor_dup_read<T: DupSort>(&self) -> Result<Self::DupCursor<T>, DatabaseError> {
         super::cursor::RocksDupCursor::new(self.db.clone(), self.get_cf::<T>()?.clone())
+        // *** clone needed??
     }
 
     fn commit(self) -> Result<bool, DatabaseError> {
@@ -108,7 +136,7 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
     fn entries<T: Table>(&self) -> Result<usize, DatabaseError> {
         let cf = self.get_cf::<T>()?;
         let mut count = 0;
-        let iter = self.db.iterator_cf(cf, rocksdb::IteratorMode::Start);
+        let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start);
         for _ in iter {
             count += 1;
         }
@@ -128,7 +156,10 @@ impl DbTxMut for RocksTransaction<true> {
     fn put<T: Table>(&self, key: T::Key, value: T::Value) -> Result<(), DatabaseError> {
         let cf = self.get_cf::<T>()?;
         if let Some(batch) = &self.batch {
-            batch.put_cf(cf, key.encode(), value.compress());
+            let mut batch = batch.lock();
+            let key_bytes = key.encode();
+            let value_bytes = value.compress();
+            batch.put_cf(&cf, key_bytes, value_bytes);
         }
         Ok(())
     }
@@ -140,7 +171,9 @@ impl DbTxMut for RocksTransaction<true> {
     ) -> Result<bool, DatabaseError> {
         let cf = self.get_cf::<T>()?;
         if let Some(batch) = &self.batch {
-            batch.delete_cf(cf, key.encode());
+            let mut batch = batch.lock();
+            let key_bytes = key.encode();
+            batch.delete_cf(&cf, key_bytes);
         }
         Ok(true)
     }
@@ -148,8 +181,12 @@ impl DbTxMut for RocksTransaction<true> {
     fn clear<T: Table>(&self) -> Result<(), DatabaseError> {
         let cf = self.get_cf::<T>()?;
         // Drop and recreate column family
-        self.db.drop_cf(T::NAME)?;
-        self.db.create_cf(T::NAME, &Options::default())?;
+        self.db
+            .drop_cf(T::NAME)
+            .map_err(|e| DatabaseError::Other(format!("Failed to drop Column family: {}", e)))?;
+        self.db
+            .create_cf(T::NAME, &Options::default())
+            .map_err(|e| DatabaseError::Other(format!("Failed to create Column family: {}", e)))?;
         Ok(())
     }
 

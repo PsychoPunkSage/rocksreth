@@ -1,5 +1,3 @@
-// src/errors.rs
-
 use std::fmt;
 use thiserror::Error;
 
@@ -39,14 +37,14 @@ pub enum RocksDBError {
 impl From<RocksDBError> for reth_db_api::DatabaseError {
     fn from(error: RocksDBError) -> Self {
         match error {
-            RocksDBError::RocksDB(e) => Self::Backend(Box::new(e)),
+            RocksDBError::RocksDB(e) => Self::Other(format!("RocksDB error: {}", e)),
             RocksDBError::ColumnFamily(msg) => Self::Other(msg),
             RocksDBError::TableOperation { name, operation } => {
                 Self::Other(format!("Table operation failed: {} - {}", name, operation))
             }
             RocksDBError::Codec(msg) => Self::Decode,
             RocksDBError::Migration(msg) => Self::Other(msg),
-            RocksDBError::Transaction(msg) => Self::Tx(msg),
+            RocksDBError::Transaction(msg) => Self::Other(format!("Transaction error: {}", msg)),
             RocksDBError::Config(msg) => Self::Other(msg),
         }
     }

@@ -3,6 +3,7 @@ use crate::implementation::rocks::cursor::RocksCursor;
 use crate::tables::trie::{AccountTrieTable, StorageTrieTable, TrieNodeValue, TrieTable};
 use crate::RocksTransaction;
 use alloy_primitives::B256;
+use reth_db::transaction::DbTx;
 use reth_db_api::{cursor::DbCursorRO, DatabaseError};
 use reth_trie::{
     hashed_cursor::{HashedCursor, HashedCursorFactory},
@@ -179,7 +180,7 @@ impl<'tx> TrieCursor for RocksStorageTrieCursor<'tx> {
             // Check if the key still has our prefix
             if composite_key.starts_with(&prefix) {
                 self.current_key = Some(value.nibbles.0.clone());
-                return Ok(Some((value.nibbles.0, Self::value_to_branch_node(value)?)));
+                return Ok(Some((value.clone().nibbles.0, Self::value_to_branch_node(value)?)));
             }
         }
 
@@ -206,11 +207,11 @@ impl<'tx> RocksTrieCursorFactory<'tx> {
 }
 
 impl<'tx> TrieCursorFactory for RocksTrieCursorFactory<'tx> {
-    type AccountTrieCursor<'tx> = RocksAccountTrieCursor<'tx>;
-    type StorageTrieCursor<'tx> = RocksStorageTrieCursor<'tx>; // *** Need internal lifetime managers
+    type AccountTrieCursor = RocksAccountTrieCursor<'tx>;
+    type StorageTrieCursor = RocksStorageTrieCursor<'tx>; // *** Need internal lifetime managers
 
     fn account_trie_cursor(&self) -> Result<Self::AccountTrieCursor, DatabaseError> {
-        Ok(RocksTrieCursor::new(self.tx))
+        Ok(RocksAccountTrieCursor::new(self.tx))
     }
 
     fn storage_trie_cursor(
@@ -218,9 +219,10 @@ impl<'tx> TrieCursorFactory for RocksTrieCursorFactory<'tx> {
         hashed_address: B256,
     ) -> Result<Self::StorageTrieCursor, DatabaseError> {
         // Convert hashed_address to bytes to use as prefix
-        let prefix = hashed_address.as_bytes().to_vec();
+        let cursor = self.tx.cursor_read::<StorageTrieTable>()?;
+        let boxed_cursor: Box<dyn DbCursorRO<StorageTrieTable> + Send + Sync> = Box::new(cursor);
 
         // Create cursor with the address prefix
-        Ok(RocksTrieCursor::new(self.tx).with_prefix(Some(prefix)))
+        Ok(RocksStorageTrieCursor::new(boxed_cursor, hashed_address))
     }
 }

@@ -30,19 +30,16 @@ impl DatabaseMetrics {
     /// Create new metrics collector
     pub fn new() -> Self {
         Self {
-            tx_read: metrics::counter!("db_tx_read_total", "Total number of read transactions"),
-            tx_write: metrics::counter!("db_tx_write_total", "Total number of write transactions"),
-            cursor_ops: metrics::counter!(
-                "db_cursor_ops_total",
-                "Total number of cursor operations"
-            ),
-            db_size: metrics::gauge!("db_size_bytes", "Database size in bytes"),
-            read_latency: metrics::histogram!("db_read_latency", "Read operation latency"),
-            write_latency: metrics::histogram!("db_write_latency", "Write operation latency"),
-            tx_duration: metrics::histogram!("db_tx_duration", "Transaction duration"),
-            compactions: metrics::counter!("db_compactions_total", "Total number of compactions"),
-            cache_hit_ratio: metrics::gauge!("db_cache_hit_ratio", "Cache hit ratio"),
-            total_keys: metrics::gauge!("db_total_keys", "Total number of keys in database"),
+            tx_read: metrics::counter!("db_tx_read_total"),
+            tx_write: metrics::counter!("db_tx_write_total"),
+            cursor_ops: metrics::counter!("db_cursor_ops_total"),
+            db_size: metrics::gauge!("db_size_bytes"),
+            read_latency: metrics::histogram!("db_read_latency"),
+            write_latency: metrics::histogram!("db_write_latency"),
+            tx_duration: metrics::histogram!("db_tx_duration"),
+            compactions: metrics::counter!("db_compactions_total"),
+            cache_hit_ratio: metrics::gauge!("db_cache_hit_ratio"),
+            total_keys: metrics::gauge!("db_total_keys"),
         }
     }
 
@@ -141,48 +138,26 @@ impl RocksDBMetrics {
     pub fn new() -> Self {
         Self {
             common: DatabaseMetrics::new(),
-            write_amp: metrics::gauge!("rocksdb_write_amplification", "Write amplification factor"),
-            read_amp: metrics::gauge!("rocksdb_read_amplification", "Read amplification factor"),
+            write_amp: metrics::gauge!("rocksdb_write_amplification"),
+            read_amp: metrics::gauge!("rocksdb_read_amplification"),
             memory_usage: RocksDBMemoryMetrics {
-                index_filter_blocks: metrics::gauge!(
-                    "rocksdb_memory_index_filter_blocks_bytes",
-                    "Memory used by index and filter blocks"
-                ),
-                memtable: metrics::gauge!(
-                    "rocksdb_memory_memtable_bytes",
-                    "Memory used by memtables"
-                ),
-                block_cache: metrics::gauge!(
-                    "rocksdb_memory_block_cache_bytes",
-                    "Memory used by block cache"
-                ),
+                index_filter_blocks: metrics::gauge!("rocksdb_memory_index_filter_blocks_bytes"),
+                memtable: metrics::gauge!("rocksdb_memory_memtable_bytes"),
+                block_cache: metrics::gauge!("rocksdb_memory_block_cache_bytes"),
             },
             level_metrics: RocksDBLevelMetrics {
                 level_size: (0..7)
-                    .map(|level| {
-                        metrics::gauge!("rocksdb_level_size_bytes", "Size of level in bytes")
-                            .with_label_values(&[&level.to_string()])
-                    })
+                    .map(|level| metrics::gauge!(format!("rocksdb_level_{}_size_bytes", level)))
                     .collect(),
                 level_files: (0..7)
-                    .map(|level| {
-                        metrics::gauge!("rocksdb_level_files", "Number of files in level")
-                            .with_label_values(&[&level.to_string()])
-                    })
+                    .map(|level| metrics::gauge!(format!("rocksdb_level_{}_files", level)))
                     .collect(),
                 level_read_hits: (0..7)
-                    .map(|level| {
-                        metrics::counter!("rocksdb_level_read_hits", "Number of read hits in level")
-                            .with_label_values(&[&level.to_string()])
-                    })
+                    .map(|level| metrics::counter!(format!("rocksdb_level_{}_read_hits", level)))
                     .collect(),
                 level_write_amp: (0..7)
                     .map(|level| {
-                        metrics::gauge!(
-                            "rocksdb_level_write_amplification",
-                            "Write amplification in level"
-                        )
-                        .with_label_values(&[&level.to_string()])
+                        metrics::gauge!(format!("rocksdb_level_{}_write_amplification", level))
                     })
                     .collect(),
             },
@@ -213,6 +188,23 @@ impl RocksDBMetrics {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Update level-specific metrics
+    pub fn update_level_metrics(
+        &self,
+        level: usize,
+        size: u64,
+        files: u64,
+        read_hits: u64,
+        write_amp: f64,
+    ) {
+        if level < self.level_metrics.level_size.len() {
+            self.level_metrics.level_size[level].set(size as f64);
+            self.level_metrics.level_files[level].set(files as f64);
+            self.level_metrics.level_read_hits[level].increment(read_hits);
+            self.level_metrics.level_write_amp[level].set(write_amp);
         }
     }
 }

@@ -169,13 +169,43 @@ where
         }
     }
 
+    // fn last(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+    //     self.iter =
+    //         self.db.iterator_cf_opt(self.cf.as_ref(), ReadOptions::default(), IteratorMode::End);
+
+    //     let next_item = self.iter.next();
+    //     self.update_current(next_item.clone());
+
+    //     match next_item {
+    //         Some(Ok((k, v))) => Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?))),
+    //         None => Ok(None),
+    //         Some(Err(e)) => Err(DatabaseError::Other(e.to_string())),
+    //     }
+    // }
+
     fn last(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.iter =
-            self.db.iterator_cf_opt(self.cf.as_ref(), ReadOptions::default(), IteratorMode::End);
+        // Clone the Arc references to avoid borrowing self directly
+        let db = self.db.clone();
+        let cf = self.cf.clone();
 
-        let next_item = self.iter.next();
-        self.update_current(next_item.clone());
+        // Create the iterator using the cloned references
+        let mut temp_iter =
+            db.iterator_cf_opt(cf.as_ref(), ReadOptions::default(), IteratorMode::End);
 
+        // Get the next item from this temporary iterator
+        let next_item = temp_iter.next();
+
+        // Store the current item
+        if let Some(Ok((k, v))) = &next_item {
+            self.current_item = Some((k.clone(), v.clone()));
+        } else {
+            self.current_item = None;
+        }
+
+        // Replace the iterator
+        self.iter = temp_iter;
+
+        // Return the result
         match next_item {
             Some(Ok((k, v))) => Ok(Some((T::Key::decode(&k)?, T::Value::decode(&v)?))),
             None => Ok(None),

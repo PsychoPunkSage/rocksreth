@@ -67,8 +67,8 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
     pub fn trie_cursor_factory(&self) -> RocksTrieCursorFactory
     where
         Self: Sized,
-        WRITE: bool,
     {
+        assert!(!WRITE, "trie_Cursor_factory only works with read-only txn");
         RocksTrieCursorFactory::new(self)
     }
 }
@@ -84,7 +84,7 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
 
         match self
             .db
-            .get_cf_opt(&cf, key_bytes, &self.read_opts)
+            .get_cf_opt(&*cf, key_bytes, &self.read_opts)
             .map_err(|e| DatabaseError::Other(format!("RocksDB Error: {}", e)))?
         {
             Some(value_bytes) => match T::Value::decode(&value_bytes) {
@@ -103,7 +103,7 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
 
         match self
             .db
-            .get_cf_opt(&cf, key, &self.read_opts)
+            .get_cf_opt(&*cf, key, &self.read_opts)
             .map_err(|e| DatabaseError::Other(format!("RocksDB error: {}", e)))?
         {
             Some(value_bytes) => match T::Value::decode(&value_bytes) {
@@ -136,7 +136,7 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
     fn entries<T: Table>(&self) -> Result<usize, DatabaseError> {
         let cf = self.get_cf::<T>()?;
         let mut count = 0;
-        let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start);
+        let iter = self.db.iterator_cf(&*cf, rocksdb::IteratorMode::Start);
         for _ in iter {
             count += 1;
         }
@@ -173,7 +173,7 @@ impl DbTxMut for RocksTransaction<true> {
         if let Some(batch) = &self.batch {
             let mut batch = batch.lock();
             let key_bytes = key.encode();
-            batch.delete_cf(&cf, key_bytes);
+            batch.delete_cf(&*cf, key_bytes);
         }
         Ok(true)
     }

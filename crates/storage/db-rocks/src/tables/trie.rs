@@ -8,7 +8,7 @@ use reth_primitives::Account;
 use reth_trie::{BranchNodeCompact, Nibbles}; // For encoding/decoding
 use reth_trie_common::{StoredNibbles, StoredNibblesSubKey};
 use rocksdb::{ColumnFamilyDescriptor, Options};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Table storing the trie nodes.
 #[derive(Debug)]
@@ -70,8 +70,14 @@ impl Encode for TrieNibbles {
 impl Decode for TrieNibbles {
     fn decode(bytes: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
         // Create Nibbles from bytes
-        let nibbles =
-            Nibbles::from_nibbles(bytes).map_err(|_| reth_db_api::DatabaseError::Decode)?;
+        let byt = bytes.to_vec();
+        // Check if all bytes are valid nibbles (0-15) before creating Nibbles
+        if byt.iter().any(|&b| b > 0xf) {
+            return Err(reth_db::DatabaseError::Decode);
+        }
+
+        // Since we've verified the bytes are valid, this won't panic
+        let nibbles = Nibbles::from_nibbles(&bytes);
         Ok(TrieNibbles(nibbles))
     }
 }
@@ -94,8 +100,13 @@ impl<'de> serde::Deserialize<'de> for TrieNibbles {
         D: serde::Deserializer<'de>,
     {
         let bytes = Vec::<u8>::deserialize(deserializer)?;
-        let nibbles = Nibbles::from_nibbles(&bytes)
-            .map_err(|_| serde::de::Error::custom("Failed to deserialize Nibbles"))?;
+        // Check if all bytes are valid nibbles (0-15) before creating Nibbles
+        if bytes.iter().any(|&b| b > 0xf) {
+            return Err(serde::de::Error::custom("Invalid nibble value"));
+        }
+
+        // Since we've verified the bytes are valid, this won't panic
+        let nibbles = Nibbles::from_nibbles(&bytes);
         Ok(TrieNibbles(nibbles))
     }
 }
@@ -173,7 +184,7 @@ impl Serialize for TrieNodeValue {
     {
         // Convert to a format that can be serialized
         // This is just an example - you'll need to adjust based on your types
-        let bytes = self.encode();
+        let bytes = self.clone().encode();
         bytes.serialize(serializer)
     }
 }

@@ -31,7 +31,7 @@ impl Encode for StorageTrieKey {
 impl Decode for StorageTrieKey {
     fn decode(bytes: &[u8]) -> Result<Self, DatabaseError> {
         if bytes.len() != 64 {
-            return Err(DatabaseError::Decode("Invalid length for StorageTrieKey".into()));
+            return Err(DatabaseError::Decode);
         }
 
         let account_hash = B256::from_slice(&bytes[0..32]);

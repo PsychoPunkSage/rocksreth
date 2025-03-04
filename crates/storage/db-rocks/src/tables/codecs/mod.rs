@@ -19,9 +19,10 @@ pub(crate) trait RocksDbDecode: Decode {
 }
 
 // Implement encoding helpers
-impl<T: Encode> RocksDbEncode for T {
+impl<T: Encode + Clone> RocksDbEncode for T {
     fn encode_to_buf(&self, buf: &mut BytesMut) {
-        let encoded = self.encode();
+        // let cloned = self.clone();
+        let encoded = self.clone().encode(); // *** MAJOR ISSUE OVER HERE
         buf.put_slice(encoded.as_ref());
     }
 }

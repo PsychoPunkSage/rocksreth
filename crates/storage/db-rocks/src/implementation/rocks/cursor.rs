@@ -1,4 +1,3 @@
-use eyre::Ok;
 use reth_db_api::table::{Decode, Encode};
 use reth_db_api::{
     cursor::{
@@ -11,6 +10,7 @@ use reth_db_api::{
 use rocksdb::{ColumnFamily, Direction, IteratorMode, ReadOptions, DB};
 use std::ops::Bound;
 use std::ops::RangeBounds;
+use std::result::Result::Ok;
 use std::result::Result::Ok;
 use std::sync::Arc;
 
@@ -428,7 +428,12 @@ where
     }
 }
 
-impl<T: DupSort, const WRITE: bool> DbDupCursorRO<T> for RocksDupCursor<T, WRITE> {
+impl<T: DupSort, const WRITE: bool> DbDupCursorRO<T> for RocksDupCursor<T, WRITE>
+where
+    T::Key: Encode + Decode + Clone + PartialEq,
+    T::Value: Encode + Decode,
+    T::SubKey: Encode + Decode,
+{
     fn next_dup(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         if let Some(current_key) = &self.current_key {
             let next = self.inner.next()?;
@@ -442,11 +447,14 @@ impl<T: DupSort, const WRITE: bool> DbDupCursorRO<T> for RocksDupCursor<T, WRITE
     }
 
     fn next_no_dup(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut current_key_clone = self.current_key.clone();
+
         while let Some((key, _)) = self.next()? {
-            if Some(&key) != self.current_key.as_ref() {
+            if Some(&key) != current_key_clone.as_ref() {
                 self.current_key = Some(key.clone());
                 return self.current();
             }
+            current_key_clone = Some(key);
         }
         Ok(None)
     }
@@ -460,7 +468,7 @@ impl<T: DupSort, const WRITE: bool> DbDupCursorRO<T> for RocksDupCursor<T, WRITE
         key: T::Key,
         subkey: T::SubKey,
     ) -> Result<Option<T::Value>, DatabaseError> {
-        let composite_key = T::compose_key(&key, &subkey);
+        let composite_key = T::Key::from_key_subkey(&key, &subkey); // *** DOUBT
         self.inner.seek_exact(composite_key).map(|opt| opt.map(|(_, v)| v))
     }
 
@@ -488,7 +496,12 @@ impl<T: DupSort, const WRITE: bool> DbDupCursorRO<T> for RocksDupCursor<T, WRITE
     }
 }
 
-impl<T: DupSort> DbCursorRW<T> for RocksDupCursor<T, true> {
+impl<T: DupSort> DbCursorRW<T> for RocksDupCursor<T, true>
+where
+    T::Key: Encode + Decode + Clone,
+    T::Value: Encode + Decode,
+    T::SubKey: Encode + Decode,
+{
     fn upsert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
         self.inner.upsert(key, value)
     }

@@ -588,20 +588,19 @@ use std::ops::RangeBounds;
 use std::result::Result::Ok;
 use std::sync::Arc;
 
-/// RocksDB cursor implementation that uses an internal iterator implementation
-/// that doesn't rely on static lifetimes
+/// RocksDB cursor implementation
 pub struct RocksCursor<T: Table, const WRITE: bool> {
     db: Arc<DB>,
     cf: Arc<ColumnFamily>,
-    // Store the current key-value pair instead of the iterator
+    // Store the current key-value pair
     current_item: Option<(Box<[u8]>, Box<[u8]>)>,
     _marker: std::marker::PhantomData<T>,
 }
 
 impl<T: Table, const WRITE: bool> RocksCursor<T, WRITE>
 where
-    T::Key: Encode + Decode,
-    T::Value: Encode + Decode,
+    T::Key: Encode + Decode + Clone,
+    T::Value: Encode + Decode + Clone,
 {
     pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
         let mut cursor = Self { db, cf, current_item: None, _marker: std::marker::PhantomData };
@@ -612,21 +611,29 @@ where
         Ok(cursor)
     }
 
-    // Helper to create a new iterator
-    fn create_iterator(&self, mode: IteratorMode) -> rocksdb::DBIteratorWithThreadMode<DB> {
-        let db = self.db.clone();
-        let cf = self.cf.clone();
-        db.iterator_cf_opt(cf.as_ref(), ReadOptions::default(), mode)
-    }
-
     // Reset cursor position to the first key
     fn reset_to_first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let mut iter = self.create_iterator(IteratorMode::Start);
-        let item = iter.next();
+        // Clone the Arc references to avoid borrowing issues
+        let db_clone = self.db.clone();
+        let cf_clone = self.cf.clone();
 
-        match item {
+        // Create a new iterator
+        let mut iter = db_clone.iterator_cf_opt(
+            cf_clone.as_ref(),
+            ReadOptions::default(),
+            IteratorMode::Start,
+        );
+
+        // Get the first item
+        let next_item = iter.next();
+
+        // Process the result
+        match next_item {
             Some(Ok((k, v))) => {
+                // Store the current key-value pair
                 self.current_item = Some((k.clone(), v.clone()));
+
+                // Decode and return
                 Ok(Some((
                     T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
                     T::Value::decode(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
@@ -646,12 +653,27 @@ where
         key_bytes: &[u8],
         direction: Direction,
     ) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let mut iter = self.create_iterator(IteratorMode::From(key_bytes, direction));
-        let item = iter.next();
+        // Clone the Arc references to avoid borrowing issues
+        let db_clone = self.db.clone();
+        let cf_clone = self.cf.clone();
 
-        match item {
+        // Create a new iterator
+        let mut iter = db_clone.iterator_cf_opt(
+            cf_clone.as_ref(),
+            ReadOptions::default(),
+            IteratorMode::From(key_bytes, direction),
+        );
+
+        // Get the next item
+        let next_item = iter.next();
+
+        // Process the result
+        match next_item {
             Some(Ok((k, v))) => {
+                // Store the current key-value pair
                 self.current_item = Some((k.clone(), v.clone()));
+
+                // Decode and return
                 Ok(Some((
                     T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
                     T::Value::decode(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
@@ -667,12 +689,24 @@ where
 
     // Reset cursor position to the end
     fn reset_to_last(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let mut iter = self.create_iterator(IteratorMode::End);
-        let item = iter.next();
+        // Clone the Arc references to avoid borrowing issues
+        let db_clone = self.db.clone();
+        let cf_clone = self.cf.clone();
 
-        match item {
+        // Create a new iterator
+        let mut iter =
+            db_clone.iterator_cf_opt(cf_clone.as_ref(), ReadOptions::default(), IteratorMode::End);
+
+        // Get the next item
+        let next_item = iter.next();
+
+        // Process the result
+        match next_item {
             Some(Ok((k, v))) => {
+                // Store the current key-value pair
                 self.current_item = Some((k.clone(), v.clone()));
+
+                // Decode and return
                 Ok(Some((
                     T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
                     T::Value::decode(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
@@ -689,19 +723,31 @@ where
     // Move to next item after current position
     fn move_to_next(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         if let Some((current_key, _)) = &self.current_item {
-            // Create iterator positioned at current key
-            let mut iter =
-                self.create_iterator(IteratorMode::From(current_key, Direction::Forward));
+            // Clone the Arc references and the current key to avoid borrowing issues
+            let db_clone = self.db.clone();
+            let cf_clone = self.cf.clone();
+            let key_clone = current_key.clone();
 
-            // Skip the current item
+            // Create a new iterator positioned at the current key
+            let mut iter = db_clone.iterator_cf_opt(
+                cf_clone.as_ref(),
+                ReadOptions::default(),
+                IteratorMode::From(&key_clone, Direction::Forward),
+            );
+
+            // Skip the current key
             let _ = iter.next();
 
             // Get the next item
-            let item = iter.next();
+            let next_item = iter.next();
 
-            match item {
+            // Process the result
+            match next_item {
                 Some(Ok((k, v))) => {
+                    // Store the current key-value pair
                     self.current_item = Some((k.clone(), v.clone()));
+
+                    // Decode and return
                     Ok(Some((
                         T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
                         T::Value::decode(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
@@ -714,7 +760,7 @@ where
                 Some(Err(e)) => Err(DatabaseError::Other(e.to_string())),
             }
         } else {
-            // If no current position, start from beginning
+            // If no current key, start from the beginning
             self.reset_to_first()
         }
     }
@@ -722,19 +768,31 @@ where
     // Move to previous item before current position
     fn move_to_prev(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         if let Some((current_key, _)) = &self.current_item {
-            // Create iterator positioned at current key in reverse
-            let mut iter =
-                self.create_iterator(IteratorMode::From(current_key, Direction::Reverse));
+            // Clone the Arc references and the current key to avoid borrowing issues
+            let db_clone = self.db.clone();
+            let cf_clone = self.cf.clone();
+            let key_clone = current_key.clone();
 
-            // Skip the current item
+            // Create a new iterator positioned at the current key in reverse direction
+            let mut iter = db_clone.iterator_cf_opt(
+                cf_clone.as_ref(),
+                ReadOptions::default(),
+                IteratorMode::From(&key_clone, Direction::Reverse),
+            );
+
+            // Skip the current key
             let _ = iter.next();
 
             // Get the previous item
-            let item = iter.next();
+            let next_item = iter.next();
 
-            match item {
+            // Process the result
+            match next_item {
                 Some(Ok((k, v))) => {
+                    // Store the current key-value pair
                     self.current_item = Some((k.clone(), v.clone()));
+
+                    // Decode and return
                     Ok(Some((
                         T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
                         T::Value::decode(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
@@ -747,7 +805,7 @@ where
                 Some(Err(e)) => Err(DatabaseError::Other(e.to_string())),
             }
         } else {
-            // If no current position, start from end
+            // If no current key, start from the end
             self.reset_to_last()
         }
     }
@@ -755,15 +813,18 @@ where
 
 impl<T: Table, const WRITE: bool> DbCursorRO<T> for RocksCursor<T, WRITE>
 where
-    T::Key: Encode + Decode,
-    T::Value: Encode + Decode,
+    T::Key: Encode + Decode + Clone + PartialEq,
+    T::Value: Encode + Decode + Clone,
 {
     fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         self.reset_to_first()
     }
 
     fn seek_exact(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let key_bytes = key.encode();
+        // Clone the key before encoding it
+        let key_clone = key.clone();
+        let key_bytes = key_clone.encode();
+
         let result = self.reset_to_key(key_bytes.as_ref(), Direction::Forward)?;
 
         // Check if the found key matches exactly
@@ -778,7 +839,10 @@ where
     }
 
     fn seek(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let key_bytes = key.encode();
+        // Clone the key before encoding it
+        let key_clone = key.clone();
+        let key_bytes = key_clone.encode();
+
         self.reset_to_key(key_bytes.as_ref(), Direction::Forward)
     }
 
@@ -874,12 +938,16 @@ where
 
 impl<T: Table> DbCursorRW<T> for RocksCursor<T, true>
 where
-    T::Key: Encode + Decode,
-    T::Value: Encode + Decode,
+    T::Key: Encode + Decode + Clone,
+    T::Value: Encode + Decode + Clone,
 {
     fn upsert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
-        let key_bytes = key.encode();
-        let value_bytes = value.encode();
+        // Clone before encoding
+        let key_clone = key.clone();
+        let value_clone = value.clone();
+
+        let key_bytes = key_clone.encode();
+        let value_bytes = value_clone.encode();
 
         // Clone before using to avoid borrowing self
         let db = self.db.clone();
@@ -906,7 +974,10 @@ where
             let db = self.db.clone();
             let cf = self.cf.clone();
 
-            let key_bytes = key.encode();
+            // Clone key before encoding
+            let key_clone = key.clone();
+            let key_bytes = key_clone.encode();
+
             db.delete_cf(cf.as_ref(), key_bytes)
                 .map_err(|e| DatabaseError::Other(e.to_string()))?;
 
@@ -925,9 +996,9 @@ pub struct RocksDupCursor<T: DupSort, const WRITE: bool> {
 
 impl<T: DupSort, const WRITE: bool> RocksDupCursor<T, WRITE>
 where
-    T::Key: Encode + Decode,
-    T::Value: Encode + Decode,
-    T::SubKey: Encode + Decode,
+    T::Key: Encode + Decode + Clone,
+    T::Value: Encode + Decode + Clone,
+    T::SubKey: Encode + Decode + Clone,
 {
     pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
         Ok(Self { inner: RocksCursor::new(db, cf)?, current_key: None })
@@ -936,13 +1007,13 @@ where
 
 impl<T: DupSort, const WRITE: bool> DbCursorRO<T> for RocksDupCursor<T, WRITE>
 where
-    T::Key: Encode + Decode + Clone,
-    T::Value: Encode + Decode,
-    T::SubKey: Encode + Decode,
+    T::Key: Encode + Decode + Clone + PartialEq,
+    T::Value: Encode + Decode + Clone,
+    T::SubKey: Encode + Decode + Clone,
 {
     fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         let result = self.inner.first()?;
-        if let Some((key, _)) = &result {
+        if let Some((ref key, _)) = result {
             self.current_key = Some(key.clone());
         } else {
             self.current_key = None;
@@ -951,7 +1022,8 @@ where
     }
 
     fn seek_exact(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let result = self.inner.seek_exact(key.clone())?;
+        let key_clone = key.clone();
+        let result = self.inner.seek_exact(key_clone)?;
         if result.is_some() {
             self.current_key = Some(key);
         } else {
@@ -962,7 +1034,7 @@ where
 
     fn seek(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         let result = self.inner.seek(key)?;
-        if let Some((key, _)) = &result {
+        if let Some((ref key, _)) = result {
             self.current_key = Some(key.clone());
         } else {
             self.current_key = None;
@@ -972,7 +1044,7 @@ where
 
     fn next(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         let result = self.inner.next()?;
-        if let Some((key, _)) = &result {
+        if let Some((ref key, _)) = result {
             self.current_key = Some(key.clone());
         } else {
             self.current_key = None;
@@ -982,7 +1054,7 @@ where
 
     fn prev(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         let result = self.inner.prev()?;
-        if let Some((key, _)) = &result {
+        if let Some((ref key, _)) = result {
             self.current_key = Some(key.clone());
         } else {
             self.current_key = None;
@@ -992,7 +1064,7 @@ where
 
     fn last(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         let result = self.inner.last()?;
-        if let Some((key, _)) = &result {
+        if let Some((ref key, _)) = result {
             self.current_key = Some(key.clone());
         } else {
             self.current_key = None;
@@ -1075,11 +1147,12 @@ where
 impl<T: DupSort, const WRITE: bool> DbDupCursorRO<T> for RocksDupCursor<T, WRITE>
 where
     T::Key: Encode + Decode + Clone + PartialEq,
-    T::Value: Encode + Decode,
-    T::SubKey: Encode + Decode,
+    T::Value: Encode + Decode + Clone,
+    T::SubKey: Encode + Decode + Clone,
 {
     fn next_dup(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        if let Some(current_key) = &self.current_key {
+        if let Some(ref current_key) = self.current_key {
+            let current_key_clone = current_key.clone();
             let next = self.inner.next()?;
             if let Some((key, value)) = next {
                 if &key == current_key {
@@ -1112,10 +1185,19 @@ where
         key: T::Key,
         subkey: T::SubKey,
     ) -> Result<Option<T::Value>, DatabaseError> {
-        // Assuming T::Key has a method to compose a key from a key and subkey
-        // You'll need to implement this based on your specific DupSort trait
-        let composite_key = T::compose_key(&key, &subkey);
-        self.inner.seek_exact(composite_key).map(|opt| opt.map(|(_, v)| v))
+        // Clone before operating on them
+        let key_clone = key.clone();
+        let subkey_clone = subkey.clone();
+
+        // Assuming T has a static method compose_key
+        let composite_key = T::compose_key(&key_clone, &subkey_clone);
+        let result = self.inner.seek_exact(composite_key)?;
+
+        if result.is_some() {
+            self.current_key = Some(key);
+        }
+
+        Ok(result.map(|(_, v)| v))
     }
 
     fn walk_dup(
@@ -1126,7 +1208,7 @@ where
     where
         Self: Sized,
     {
-        match (key, subkey) {
+        match (key.clone(), subkey.clone()) {
             (Some(k), Some(sk)) => {
                 let _ = self.seek_by_key_subkey(k.clone(), sk)?;
                 self.current_key = Some(k);
@@ -1149,9 +1231,9 @@ where
 
 impl<T: DupSort> DbCursorRW<T> for RocksDupCursor<T, true>
 where
-    T::Key: Encode + Decode + Clone,
-    T::Value: Encode + Decode,
-    T::SubKey: Encode + Decode,
+    T::Key: Encode + Decode + Clone + PartialEq,
+    T::Value: Encode + Decode + Clone,
+    T::SubKey: Encode + Decode + Clone,
 {
     fn upsert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
         self.inner.upsert(key, value)
@@ -1173,15 +1255,15 @@ where
 impl<T: DupSort> DbDupCursorRW<T> for RocksDupCursor<T, true>
 where
     T::Key: Encode + Decode + Clone + PartialEq,
-    T::Value: Encode + Decode,
-    T::SubKey: Encode + Decode,
+    // T::Value: Encode + Decode + Clone,
+    T::SubKey: Encode + Decode + Clone,
 {
     fn delete_current_duplicates(&mut self) -> Result<(), DatabaseError> {
-        if let Some(current_key) = &self.current_key {
+        if let Some(ref current_key) = self.current_key.clone() {
             // Keep track of the current key while deleting duplicates
-            let key = current_key.clone();
+            let key_clone = current_key.clone();
             while let Some((cur_key, _)) = self.inner.current()? {
-                if &cur_key != &key {
+                if &cur_key != &key_clone {
                     break;
                 }
                 self.inner.delete_current()?;

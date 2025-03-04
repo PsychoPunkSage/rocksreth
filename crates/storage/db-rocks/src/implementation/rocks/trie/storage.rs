@@ -1,5 +1,5 @@
 use crate::{
-    implementation::rocks::RocksTransaction,
+    implementation::rocks::tx::RocksTransaction,
     tables::trie::{AccountTrieTable, StorageTrieTable, TrieTable},
 };
 use alloy_primitives::{Address, B256};

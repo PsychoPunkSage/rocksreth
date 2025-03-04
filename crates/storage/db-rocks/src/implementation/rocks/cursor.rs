@@ -573,13 +573,12 @@
 //     }
 // }
 
-use reth_db_api::table::{Decode, Encode};
 use reth_db_api::{
     cursor::{
         DbCursorRO, DbCursorRW, DbDupCursorRO, DbDupCursorRW, DupWalker, RangeWalker,
         ReverseWalker, Walker,
     },
-    table::{DupSort, Table},
+    table::{Compress, Decode, Decompress, DupSort, Encode, Table},
     DatabaseError,
 };
 use rocksdb::{AsColumnFamilyRef, ColumnFamily, Direction, IteratorMode, ReadOptions, DB};
@@ -600,7 +599,6 @@ pub struct RocksCursor<T: Table, const WRITE: bool> {
 impl<T: Table, const WRITE: bool> RocksCursor<T, WRITE>
 where
     T::Key: Encode + Decode + Clone,
-    T::Value: Encode + Decode + Clone,
 {
     pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
         let mut cursor = Self { db, cf, current_item: None, _marker: std::marker::PhantomData };
@@ -612,7 +610,10 @@ where
     }
 
     // Reset cursor position to the first key
-    fn reset_to_first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+    fn reset_to_first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError>
+    where
+        T::Value: Decompress,
+    {
         // Clone the Arc references to avoid borrowing issues
         let db_clone = self.db.clone();
         let cf_clone = self.cf.clone();
@@ -636,7 +637,7 @@ where
                 // Decode and return
                 Ok(Some((
                     T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                    T::Value::decode(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
+                    T::Value::decompress(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
                 )))
             }
             None => {
@@ -652,7 +653,10 @@ where
         &mut self,
         key_bytes: &[u8],
         direction: Direction,
-    ) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+    ) -> Result<Option<(T::Key, T::Value)>, DatabaseError>
+    where
+        T::Value: Decompress,
+    {
         // Clone the Arc references to avoid borrowing issues
         let db_clone = self.db.clone();
         let cf_clone = self.cf.clone();
@@ -676,7 +680,7 @@ where
                 // Decode and return
                 Ok(Some((
                     T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                    T::Value::decode(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
+                    T::Value::decompress(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
                 )))
             }
             None => {
@@ -688,7 +692,10 @@ where
     }
 
     // Reset cursor position to the end
-    fn reset_to_last(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+    fn reset_to_last(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError>
+    where
+        T::Value: Decompress,
+    {
         // Clone the Arc references to avoid borrowing issues
         let db_clone = self.db.clone();
         let cf_clone = self.cf.clone();
@@ -709,7 +716,7 @@ where
                 // Decode and return
                 Ok(Some((
                     T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                    T::Value::decode(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
+                    T::Value::decompress(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
                 )))
             }
             None => {
@@ -721,7 +728,10 @@ where
     }
 
     // Move to next item after current position
-    fn move_to_next(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+    fn move_to_next(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError>
+    where
+        T::Value: Decompress,
+    {
         if let Some((current_key, _)) = &self.current_item {
             // Clone the Arc references and the current key to avoid borrowing issues
             let db_clone = self.db.clone();
@@ -750,7 +760,8 @@ where
                     // Decode and return
                     Ok(Some((
                         T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                        T::Value::decode(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
+                        T::Value::decompress(&v)
+                            .map_err(|e| DatabaseError::Other(e.to_string()))?,
                     )))
                 }
                 None => {
@@ -766,7 +777,10 @@ where
     }
 
     // Move to previous item before current position
-    fn move_to_prev(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+    fn move_to_prev(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError>
+    where
+        T::Value: Decompress,
+    {
         if let Some((current_key, _)) = &self.current_item {
             // Clone the Arc references and the current key to avoid borrowing issues
             let db_clone = self.db.clone();
@@ -795,7 +809,8 @@ where
                     // Decode and return
                     Ok(Some((
                         T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                        T::Value::decode(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
+                        T::Value::decompress(&v)
+                            .map_err(|e| DatabaseError::Other(e.to_string()))?,
                     )))
                 }
                 None => {
@@ -814,7 +829,7 @@ where
 impl<T: Table, const WRITE: bool> DbCursorRO<T> for RocksCursor<T, WRITE>
 where
     T::Key: Encode + Decode + Clone + PartialEq,
-    T::Value: Encode + Decode + Clone,
+    T::Value: Decompress,
 {
     fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         self.reset_to_first()
@@ -862,7 +877,7 @@ where
         match &self.current_item {
             Some((k, v)) => Ok(Some((
                 T::Key::decode(k).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                T::Value::decode(v).map_err(|e| DatabaseError::Other(e.to_string()))?,
+                T::Value::decompress(v).map_err(|e| DatabaseError::Other(e.to_string()))?,
             ))),
             None => Ok(None),
         }
@@ -939,15 +954,14 @@ where
 impl<T: Table> DbCursorRW<T> for RocksCursor<T, true>
 where
     T::Key: Encode + Decode + Clone,
-    T::Value: Encode + Decode + Clone,
+    T::Value: Compress + Decompress,
 {
     fn upsert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
         // Clone before encoding
         let key_clone = key.clone();
-        let value_clone = value.clone();
 
         let key_bytes = key_clone.encode();
-        let value_bytes = value_clone.encode();
+        let value_bytes = value.compress().to_vec();
 
         // Clone before using to avoid borrowing self
         let db = self.db.clone();
@@ -997,7 +1011,6 @@ pub struct RocksDupCursor<T: DupSort, const WRITE: bool> {
 impl<T: DupSort, const WRITE: bool> RocksDupCursor<T, WRITE>
 where
     T::Key: Encode + Decode + Clone,
-    T::Value: Encode + Decode + Clone,
     T::SubKey: Encode + Decode + Clone,
 {
     pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
@@ -1008,7 +1021,7 @@ where
 impl<T: DupSort, const WRITE: bool> DbCursorRO<T> for RocksDupCursor<T, WRITE>
 where
     T::Key: Encode + Decode + Clone + PartialEq,
-    T::Value: Encode + Decode + Clone,
+    T::Value: Decompress,
     T::SubKey: Encode + Decode + Clone,
 {
     fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
@@ -1147,7 +1160,7 @@ where
 impl<T: DupSort, const WRITE: bool> DbDupCursorRO<T> for RocksDupCursor<T, WRITE>
 where
     T::Key: Encode + Decode + Clone + PartialEq,
-    T::Value: Encode + Decode + Clone,
+    T::Value: Decompress,
     T::SubKey: Encode + Decode + Clone,
 {
     fn next_dup(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
@@ -1232,7 +1245,7 @@ where
 impl<T: DupSort> DbCursorRW<T> for RocksDupCursor<T, true>
 where
     T::Key: Encode + Decode + Clone + PartialEq,
-    T::Value: Encode + Decode + Clone,
+    T::Value: Compress + Decompress,
     T::SubKey: Encode + Decode + Clone,
 {
     fn upsert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
@@ -1255,7 +1268,7 @@ where
 impl<T: DupSort> DbDupCursorRW<T> for RocksDupCursor<T, true>
 where
     T::Key: Encode + Decode + Clone + PartialEq,
-    // T::Value: Encode + Decode + Clone,
+    T::Value: Compress + Decompress,
     T::SubKey: Encode + Decode + Clone,
 {
     fn delete_current_duplicates(&mut self) -> Result<(), DatabaseError> {

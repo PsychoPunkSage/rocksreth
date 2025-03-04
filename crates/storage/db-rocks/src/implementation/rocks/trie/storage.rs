@@ -4,6 +4,7 @@ use crate::{
 };
 use alloy_primitives::{Address, B256};
 use eyre::Ok;
+use reth_db_api::transaction::DbTx;
 use reth_db_api::{transaction::DbTxMut, DatabaseError};
 use reth_execution_errors::StateRootError;
 use reth_primitives::Account;

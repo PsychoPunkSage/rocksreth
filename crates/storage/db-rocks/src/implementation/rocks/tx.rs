@@ -16,6 +16,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 /// Generic transaction type for RocksDB
+#[derive(Clone)]
 pub struct RocksTransaction<const WRITE: bool> {
     /// Reference to DB
     db: Arc<DB>,
@@ -55,9 +56,10 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
     }
 
     /// Get the column family handle for a table
-    fn get_cf<T: Table>(&self) -> Result<&ColumnFamily, DatabaseError> {
+    fn get_cf<T: Table>(&self) -> Result<Arc<ColumnFamily>, DatabaseError> {
         self.db
             .cf_handle(T::NAME)
+            .map(|cf| Arc::new(cf.clone().to_owned()))
             .ok_or_else(|| DatabaseError::Other(format!("Column family not found: {}", T::NAME)))
     }
 
@@ -87,18 +89,18 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
     type DupCursor<T: DupSort> = RocksDupCursor<T, WRITE>;
 
     fn get<T: Table>(&self, key: T::Key) -> Result<Option<T::Value>, DatabaseError>
-// where
-        // T::Value: Decode,
+    where
+        T::Value: Decompress,
     {
         let cf = self.get_cf::<T>()?;
         let key_bytes = key.encode();
 
         match self
             .db
-            .get_cf_opt(cf, key_bytes, &self.read_opts)
+            .get_cf_opt(cf.as_ref(), key_bytes, &self.read_opts)
             .map_err(|e| DatabaseError::Other(format!("RocksDB Error: {}", e)))?
         {
-            Some(value_bytes) => match T::Value::decode(&value_bytes) {
+            Some(value_bytes) => match T::Value::decompress(&value_bytes) {
                 Ok(value) => Ok(Some(value)),
                 Err(e) => Err(e),
             },
@@ -110,17 +112,17 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
         &self,
         key: &<T::Key as Encode>::Encoded,
     ) -> Result<Option<T::Value>, DatabaseError>
-// where
-        // T::Value: Decode,
+    where
+        T::Value: Decompress,
     {
         let cf = self.get_cf::<T>()?;
 
         match self
             .db
-            .get_cf_opt(cf, key, &self.read_opts)
+            .get_cf_opt(cf.as_ref(), key, &self.read_opts)
             .map_err(|e| DatabaseError::Other(format!("RocksDB error: {}", e)))?
         {
-            Some(value_bytes) => match T::Value::decode(&value_bytes) {
+            Some(value_bytes) => match T::Value::decompress(&value_bytes) {
                 Ok(val) => Ok(Some(val)),
                 Err(e) => Err(e),
             },
@@ -131,7 +133,6 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
     fn cursor_read<T: Table>(&self) -> Result<Self::Cursor<T>, DatabaseError>
     where
         T::Key: Encode + Decode + Clone,
-        // T::Value: Encode + Decode + Clone,
     {
         RocksCursor::new(self.db.clone(), self.get_cf::<T>()?)
     }
@@ -139,7 +140,6 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
     fn cursor_dup_read<T: DupSort>(&self) -> Result<Self::DupCursor<T>, DatabaseError>
     where
         T::Key: Encode + Decode + Clone + PartialEq,
-        // T::Value: Encode + Decode + Clone,
         T::SubKey: Encode + Decode + Clone,
     {
         RocksDupCursor::new(self.db.clone(), self.get_cf::<T>()?)
@@ -157,7 +157,7 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
     fn entries<T: Table>(&self) -> Result<usize, DatabaseError> {
         let cf = self.get_cf::<T>()?;
         let mut count = 0;
-        let iter = self.db.iterator_cf(cf, rocksdb::IteratorMode::Start);
+        let iter = self.db.iterator_cf(cf.as_ref(), rocksdb::IteratorMode::Start);
         for _ in iter {
             count += 1;
         }
@@ -182,8 +182,9 @@ impl DbTxMut for RocksTransaction<true> {
         if let Some(batch) = &self.batch {
             let mut batch = batch.lock();
             let key_bytes = key.encode();
-            let value_bytes = value.compress();
-            batch.put_cf(cf, key_bytes, value_bytes);
+            // let value_bytes = value.compress();
+            let value_bytes = value.compress().to_vec();
+            batch.put_cf(cf.as_ref(), key_bytes, value_bytes);
         }
         Ok(())
     }
@@ -197,7 +198,7 @@ impl DbTxMut for RocksTransaction<true> {
         if let Some(batch) = &self.batch {
             let mut batch = batch.lock();
             let key_bytes = key.encode();
-            batch.delete_cf(cf, key_bytes);
+            batch.delete_cf(cf.as_ref(), key_bytes);
         }
         Ok(true)
     }
@@ -218,7 +219,6 @@ impl DbTxMut for RocksTransaction<true> {
     fn cursor_write<T: Table>(&self) -> Result<Self::CursorMut<T>, DatabaseError>
     where
         T::Key: Encode + Decode + Clone,
-        // T::Value: Encode + Decode + Clone,
     {
         RocksCursor::new(self.db.clone(), self.get_cf::<T>()?)
     }
@@ -226,7 +226,6 @@ impl DbTxMut for RocksTransaction<true> {
     fn cursor_dup_write<T: DupSort>(&self) -> Result<Self::DupCursorMut<T>, DatabaseError>
     where
         T::Key: Encode + Decode + Clone + PartialEq,
-        // T::Value: Encode + Decode + Clone,
         T::SubKey: Encode + Decode + Clone,
     {
         RocksDupCursor::new(self.db.clone(), self.get_cf::<T>()?)
@@ -237,13 +236,15 @@ impl TableImporter for RocksTransaction<true> {
     fn import_table<T: Table, R: DbTx>(&self, source_tx: &R) -> Result<(), DatabaseError>
     where
         T::Key: Encode + Decode + Clone,
-        // T::Value: Encode + Decode + Clone,
+        T::Value: Compress + Decompress,
     {
         let mut destination_cursor = self.cursor_write::<T>()?;
+        let mut source_cursor = source_tx.cursor_read::<T>()?;
 
-        for kv in source_tx.cursor_read::<T>()?.walk(None)? {
-            let (k, v) = kv?;
-            destination_cursor.append(k, &v)?;
+        let mut current = source_cursor.first()?;
+        while let Some((key, value)) = current {
+            destination_cursor.upsert(key, &value)?;
+            current = source_cursor.next()?;
         }
 
         Ok(())
@@ -256,19 +257,24 @@ impl TableImporter for RocksTransaction<true> {
         to: <T as Table>::Key,
     ) -> Result<(), DatabaseError>
     where
-        T::Key: Default + Encode + Decode + Clone + PartialEq,
-        // T::Value: Encode + Decode + Clone,
+        T::Key: Default + Encode + Decode + Clone + PartialEq + Ord,
+        T::Value: Compress + Decompress,
     {
         let mut destination_cursor = self.cursor_write::<T>()?;
         let mut source_cursor = source_tx.cursor_read::<T>()?;
 
-        let source_range = match from {
-            Some(from) => source_cursor.walk_range(from..=to),
-            None => source_cursor.walk_range(..=to),
+        let mut current = match from {
+            Some(from_key) => source_cursor.seek(from_key)?,
+            None => source_cursor.first()?,
         };
-        for row in source_range? {
-            let (key, value) = row?;
-            destination_cursor.append(key, &value)?;
+
+        while let Some((key, value)) = current {
+            if key > to {
+                break;
+            }
+
+            destination_cursor.upsert(key, &value)?;
+            current = source_cursor.next()?;
         }
 
         Ok(())
@@ -277,16 +283,25 @@ impl TableImporter for RocksTransaction<true> {
     fn import_dupsort<T: DupSort, R: DbTx>(&self, source_tx: &R) -> Result<(), DatabaseError>
     where
         T::Key: Encode + Decode + Clone + PartialEq,
-        // T::Value: Encode + Decode + Clone,
+        T::Value: Compress + Decompress,
         T::SubKey: Encode + Decode + Clone,
     {
         let mut destination_cursor = self.cursor_dup_write::<T>()?;
-        let mut cursor = source_tx.cursor_dup_read::<T>()?;
+        let mut source_cursor = source_tx.cursor_dup_read::<T>()?;
 
-        while let Some((k, _)) = cursor.next_no_dup()? {
-            for kv in cursor.walk_dup(Some(k.clone()), None)? {
-                let (k, v) = kv?;
-                destination_cursor.append_dup(k, v)?;
+        let mut current = source_cursor.first()?;
+
+        while let Some((key, value)) = current {
+            destination_cursor.upsert(key.clone(), &value)?;
+
+            // Try to get next value with same key
+            let next_with_same_key = source_cursor.next_dup()?;
+
+            if next_with_same_key.is_some() {
+                current = next_with_same_key;
+            } else {
+                // Move to next key group
+                current = source_cursor.next_no_dup()?;
             }
         }
 

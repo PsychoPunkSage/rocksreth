@@ -961,7 +961,10 @@ where
         let key_clone = key.clone();
 
         let key_bytes = key_clone.encode();
-        let value_bytes = value.compress().to_vec();
+        // let value_bytes: Vec<u8> = value.compress().into();
+        let mut compressed = <<T as Table>::Value as Compress>::Compressed::default();
+        value.compress_to_buf(&mut compressed);
+        let value_bytes: Vec<u8> = compressed.into();
 
         // Clone before using to avoid borrowing self
         let db = self.db.clone();

@@ -16,7 +16,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 /// Generic transaction type for RocksDB
-#[derive(Clone)]
 pub struct RocksTransaction<const WRITE: bool> {
     /// Reference to DB
     db: Arc<DB>,
@@ -59,7 +58,7 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
     fn get_cf<T: Table>(&self) -> Result<Arc<ColumnFamily>, DatabaseError> {
         self.db
             .cf_handle(T::NAME)
-            .map(|cf| Arc::new(cf.clone().to_owned()))
+            .map(|cf| cf.clone().to_owned())
             .ok_or_else(|| DatabaseError::Other(format!("Column family not found: {}", T::NAME)))
     }
 

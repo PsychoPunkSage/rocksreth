@@ -137,8 +137,11 @@ impl<'tx> TrieCursor for RocksStorageTrieCursor<'tx> {
         let subkey = StoredNibbles(key.clone());
 
         // Create composite key using DupSortHelper
-        let composite_key =
+        let composite_key_vec =
             DupSortHelper::create_composite_key::<StorageTrieTable>(&self.hashed_address, &subkey)?;
+
+        let composite_key = FixedBytes::<32>::try_from(composite_key_vec.as_slice())
+            .map_err(|_| anyhow::anyhow!("Failed to convert Vec<u8> to FixedBytes<32>"))?;
 
         // Use seek_exact with the composite key
         if let Some((_, value)) = self.cursor.seek_exact(composite_key)? {
@@ -155,7 +158,10 @@ impl<'tx> TrieCursor for RocksStorageTrieCursor<'tx> {
         key: Nibbles,
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
         // Create prefix for scanning all entries with this account hash
-        let prefix = DupSortHelper::create_prefix::<StorageTrieTable>(&self.hashed_address)?;
+        let prefix_vec = DupSortHelper::create_prefix::<StorageTrieTable>(&self.hashed_address)?;
+
+        let prefix = FixedBytes::<32>::try_from(prefix_vec.as_slice())
+            .map_err(|_| anyhow::anyhow!("Failed to convert Vec<u8> to FixedBytes<32>"))?;
 
         // Seek to the first entry with this prefix
         if let Some((_, value)) = self.cursor.seek(prefix)? {

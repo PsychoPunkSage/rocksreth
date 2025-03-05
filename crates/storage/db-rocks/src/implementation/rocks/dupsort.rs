@@ -1,4 +1,5 @@
 use bytes::{BufMut, BytesMut};
+use reth_db_api::table::Decode;
 use reth_db_api::{
     table::{DupSort, Encode},
     DatabaseError,
@@ -19,15 +20,15 @@ impl DupSortHelper {
         let mut bytes = BytesMut::new();
 
         // Encode main key
-        let key_bytes = key.encode();
-        bytes.put_slice(&key_bytes);
+        let key_bytes = key.clone().encode();
+        bytes.put_slice(key_bytes.as_ref());
 
         // Add delimiter
         bytes.put_u8(DELIMITER);
 
         // Encode subkey
-        let subkey_bytes = subkey.encode();
-        bytes.put_slice(&subkey_bytes);
+        let subkey_bytes = subkey.clone().encode();
+        bytes.put_slice(subkey_bytes.as_ref());
 
         Ok(bytes.to_vec())
     }
@@ -50,8 +51,8 @@ impl DupSortHelper {
     /// Create prefix for scanning all subkeys of a key
     pub fn create_prefix<T: DupSort>(key: &T::Key) -> Result<Vec<u8>, DatabaseError> {
         let mut bytes = BytesMut::new();
-        let key_bytes = key.encode();
-        bytes.put_slice(&key_bytes);
+        let key_bytes = key.clone().encode();
+        bytes.put_slice(key_bytes.as_ref());
         bytes.put_u8(DELIMITER);
         Ok(bytes.to_vec())
     }

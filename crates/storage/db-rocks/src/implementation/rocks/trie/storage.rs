@@ -1,6 +1,6 @@
 use crate::{
     implementation::rocks::tx::RocksTransaction,
-    tables::trie::{AccountTrieTable, StorageTrieTable, TrieTable},
+    tables::trie::{AccountTrieTable, StorageTrieTable, TrieNibbles, TrieNodeValue, TrieTable},
 };
 use alloy_primitives::{Address, B256};
 use eyre::Ok;
@@ -8,7 +8,9 @@ use reth_db_api::transaction::DbTx;
 use reth_db_api::{transaction::DbTxMut, DatabaseError};
 use reth_execution_errors::StateRootError;
 use reth_primitives::Account;
-use reth_trie::{updates::TrieUpdates, HashedPostState, StateRootProgress, TrieInput};
+use reth_trie::{
+    updates::TrieUpdates, BranchNodeCompact, HashedPostState, StateRootProgress, TrieInput,
+};
 use reth_trie_db::{DatabaseStateRoot, DatabaseStorageRoot, StateCommitment};
 
 /// Implementation of trie storage operations
@@ -19,42 +21,50 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
     }
 
     /// Get an account by its hash
-    pub fn get_account(&self, hash: B256) -> Result<Option<Account>, DatabaseError> {
+    pub fn get_account(
+        &self,
+        hash: TrieNibbles,
+    ) -> Result<Option<BranchNodeCompact>, DatabaseError> {
         self.get::<AccountTrieTable>(hash)
     }
 
     /// Get storage value for account and key
-    pub fn get_storage(&self, account: B256, key: B256) -> Result<Option<B256>, DatabaseError> {
+    pub fn get_storage(
+        &self,
+        account: B256,
+        key: B256,
+    ) -> Result<Option<TrieNodeValue>, DatabaseError> {
         self.get::<StorageTrieTable>((account, key))
     }
 }
 
-impl<'a> DatabaseStateRoot<'a, RocksTransaction<false>> for RocksTransaction<false> {
+impl<'a> DatabaseStateRoot<'a, RocksTransaction<false>> for &'a RocksTransaction<false> {
     fn from_tx(tx: &'a RocksTransaction<false>) -> Self {
-        tx.clone()
+        tx
     }
 
     fn incremental_root_calculator(
         tx: &'a RocksTransaction<false>,
         range: std::ops::RangeInclusive<u64>,
     ) -> Result<Self, reth_execution_errors::StateRootError> {
-        Ok(tx.clone())
+        Ok(tx)
     }
 
     fn incremental_root(
         tx: &'a RocksTransaction<false>,
         range: std::ops::RangeInclusive<u64>,
     ) -> Result<B256, reth_execution_errors::StateRootError> {
-        // Create factory from transaction
-        let trie_factory = tx.trie_cursor_factory();
-        let hashed_factory = tx.hashed_cursor_factory(); // NEED TO IMPLEMENT
+        todo!("Implement incremental root")
+        // // Create factory from transaction
+        // let trie_factory = tx.trie_cursor_factory();
+        // let hashed_factory = tx.hashed_cursor_factory(); // NEED TO IMPLEMENT
 
-        // Use the trie-db implementation with your factories
-        let commitment = StateCommitment::new(trie_factory, hashed_factory);
-        // *** NO NEW METHOD
-        let root = commitment.incremental_root(range)?;
-        /// *** wth??
-        Ok(root) // *** Need to return correct type
+        // // Use the trie-db implementation with your factories
+        // let commitment = StateCommitment::new(trie_factory, hashed_factory);
+        // // *** NO NEW METHOD
+        // let root = commitment.incremental_root(range)?;
+        // /// *** wth??
+        // Ok(root) // *** Need to return correct type
     }
 
     fn incremental_root_with_updates(
@@ -106,13 +116,13 @@ impl<'a> DatabaseStateRoot<'a, RocksTransaction<false>> for RocksTransaction<fal
     }
 }
 
-impl<'a> DatabaseStorageRoot<'a, RocksTransaction<false>> for RocksTransaction<false> {
+impl<'a> DatabaseStorageRoot<'a, RocksTransaction<false>> for &'a RocksTransaction<false> {
     fn from_tx(tx: &'a RocksTransaction<false>, address: Address) -> Self {
-        tx.clone()
+        tx
     }
 
     fn from_tx_hashed(tx: &'a RocksTransaction<false>, hashed_address: B256) -> Self {
-        tx.clone()
+        tx
     }
 
     fn overlay_root(

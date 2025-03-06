@@ -9,9 +9,14 @@ use reth_db_api::{transaction::DbTxMut, DatabaseError};
 use reth_execution_errors::StateRootError;
 use reth_primitives::Account;
 use reth_trie::{
-    updates::TrieUpdates, BranchNodeCompact, HashedPostState, StateRootProgress, TrieInput,
+    updates::TrieUpdates, BranchNodeCompact, HashedPostState, KeccakKeyHasher, StateRoot,
+    StateRootProgress, TrieInput,
 };
-use reth_trie_db::{DatabaseStateRoot, DatabaseStorageRoot, StateCommitment};
+use reth_trie_db::{
+    DatabaseHashedCursorFactory, DatabaseStateRoot, DatabaseStorageRoot, DatabaseTrieCursorFactory,
+    PrefixSetLoader, StateCommitment,
+};
+use std::fmt::format;
 
 /// Implementation of trie storage operations
 impl<const WRITE: bool> RocksTransaction<WRITE> {
@@ -65,25 +70,29 @@ impl<'a> DatabaseStateRoot<'a, RocksTransaction<false>> for &'a RocksTransaction
         tx: &'a RocksTransaction<false>,
         range: std::ops::RangeInclusive<u64>,
     ) -> Result<Self, reth_execution_errors::StateRootError> {
-        // Ok(tx)
-        todo!("Implement incremental root calculator")
+        Ok(tx).map_err(|e| {
+            reth_execution_errors::StateRootError::Database(DatabaseError::Other(format!(
+                "ErrReport: {:?}",
+                e
+            )))
+        })
     }
 
     fn incremental_root(
         tx: &'a RocksTransaction<false>,
         range: std::ops::RangeInclusive<u64>,
     ) -> Result<B256, reth_execution_errors::StateRootError> {
-        todo!("Implement incremental root")
-        // // Create factory from transaction
-        // let trie_factory = tx.trie_cursor_factory();
-        // let hashed_factory = tx.hashed_cursor_factory(); // NEED TO IMPLEMENT
+        // Create a StateRoot calculator with txn + load the prefix sets for the range.
+        let loaded_prefix_sets = PrefixSetLoader::<_, KeccakKeyHasher>::new(tx).load(range)?;
 
-        // // Use the trie-db implementation with your factories
-        // let commitment = StateCommitment::new(trie_factory, hashed_factory);
-        // // *** NO NEW METHOD
-        // let root = commitment.incremental_root(range)?;
-        // /// *** wth??
-        // Ok(root) // *** Need to return correct type
+        // Create a stateroot calculator with the txn and prefix sets
+        let calculator = StateRoot::new(
+            DatabaseTrieCursorFactory::new(tx),
+            DatabaseHashedCursorFactory::new(tx), // maybe I have to implement DatabaseHashedCursorFactory
+        )
+        .with_prefix_sets(loaded_prefix_sets);
+
+        calculator.root()
     }
 
     fn incremental_root_with_updates(
@@ -91,7 +100,16 @@ impl<'a> DatabaseStateRoot<'a, RocksTransaction<false>> for &'a RocksTransaction
         range: std::ops::RangeInclusive<u64>,
     ) -> Result<(B256, TrieUpdates), reth_execution_errors::StateRootError> {
         // Computes root and collects updates
-        todo!("Implement incremental root with updates")
+        let loaded_prefix_sets = PrefixSetLoader::<_, KeccakKeyHasher>::new(tx).load(range)?;
+
+        // Create StateRoot calculator with txn and prefix-sets
+        let calculator = StateRoot::new(
+            DatabaseTrieCursorFactory::new(tx),
+            DatabaseHashedCursorFactory::new(tx),
+        )
+        .with_prefix_sets(loaded_prefix_sets);
+
+        calculator.root_with_updates()
     }
 
     fn incremental_root_with_progress(

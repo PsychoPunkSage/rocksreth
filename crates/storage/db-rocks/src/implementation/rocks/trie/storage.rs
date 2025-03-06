@@ -9,8 +9,10 @@ use reth_db_api::{transaction::DbTxMut, DatabaseError};
 use reth_execution_errors::StateRootError;
 use reth_primitives::Account;
 use reth_trie::{
-    updates::TrieUpdates, BranchNodeCompact, HashedPostState, KeccakKeyHasher, StateRoot,
-    StateRootProgress, TrieInput,
+    hashed_cursor::{HashedCursorFactory, HashedPostStateCursorFactory},
+    trie_cursor::InMemoryTrieCursorFactory,
+    updates::TrieUpdates,
+    BranchNodeCompact, HashedPostState, KeccakKeyHasher, StateRoot, StateRootProgress, TrieInput,
 };
 use reth_trie_db::{
     DatabaseHashedCursorFactory, DatabaseStateRoot, DatabaseStorageRoot, DatabaseTrieCursorFactory,
@@ -116,40 +118,81 @@ impl<'a> DatabaseStateRoot<'a, RocksTransaction<false>> for &'a RocksTransaction
         tx: &'a RocksTransaction<false>,
         range: std::ops::RangeInclusive<u64>,
     ) -> Result<StateRootProgress, reth_execution_errors::StateRootError> {
-        // Computes root with progress tracking
-        todo!("Implement incremental root with progress")
+        let loaded_prefix_set = PrefixSetLoader::<_, KeccakKeyHasher>::new(tx).load(range)?;
+
+        // Create StateRoot calculator with txn and prefix-sets
+        let calculator = StateRoot::new(
+            DatabaseTrieCursorFactory::new(tx),
+            DatabaseHashedCursorFactory::new(tx),
+        )
+        .with_prefix_sets(loaded_prefix_set);
+
+        calculator.root_with_progress()
     }
 
     fn overlay_root(
         tx: &'a RocksTransaction<false>,
         post_state: HashedPostState,
     ) -> Result<B256, reth_execution_errors::StateRootError> {
-        // Calculate root from post state
-        todo!("Implement overlay root")
+        let prefix_sets = post_state.construct_prefix_sets().freeze();
+
+        let state_sorted = post_state.into_sorted();
+
+        // Create StateRoot calculator with txn and prefix-sets
+        StateRoot::new(
+            DatabaseTrieCursorFactory::new(tx),
+            HashedPostStateCursorFactory::new(DatabaseHashedCursorFactory::new(tx), &state_sorted),
+        )
+        .with_prefix_sets(prefix_sets)
+        .root()
     }
 
     fn overlay_root_with_updates(
         tx: &'a RocksTransaction<false>,
         post_state: HashedPostState,
     ) -> Result<(B256, TrieUpdates), reth_execution_errors::StateRootError> {
-        // Calculate root and collect updates
-        todo!("Implement overlay root with updates")
+        let prefix_sets = post_state.construct_prefix_sets().freeze();
+
+        let state_sorted = post_state.into_sorted();
+
+        // Create StateRoot calculator with txn and prefix-sets
+        StateRoot::new(
+            DatabaseTrieCursorFactory::new(tx),
+            HashedPostStateCursorFactory::new(DatabaseHashedCursorFactory::new(tx), &state_sorted),
+        )
+        .with_prefix_sets(prefix_sets)
+        .root_with_updates()
     }
 
     fn overlay_root_from_nodes(
         tx: &'a RocksTransaction<false>,
         input: TrieInput,
     ) -> Result<B256, reth_execution_errors::StateRootError> {
-        // Calculate root using provided nodes
-        todo!("Implement overlay root from nodes")
+        let state_sorted = input.state.into_sorted();
+        let nodes_sorted = input.nodes.into_sorted();
+
+        // Create a StateRoot calculator with the transaction, in-memory nodes, post state, and prefix sets
+        StateRoot::new(
+            InMemoryTrieCursorFactory::new(DatabaseTrieCursorFactory::new(tx), &nodes_sorted),
+            HashedPostStateCursorFactory::new(DatabaseHashedCursorFactory::new(tx), &state_sorted),
+        )
+        .with_prefix_sets(input.prefix_sets.freeze())
+        .root()
     }
 
     fn overlay_root_from_nodes_with_updates(
         tx: &'a RocksTransaction<false>,
         input: TrieInput,
     ) -> Result<(B256, TrieUpdates), reth_execution_errors::StateRootError> {
-        // Calculate root and collect updates using provided nodes
-        todo!("Implement overlay root from nodes with updates")
+        let state_sorted = input.state.into_sorted();
+        let nodes_sorted = input.nodes.into_sorted();
+
+        StateRoot::new(
+            InMemoryTrieCursorFactory::new(DatabaseTrieCursorFactory::new(tx), &nodes_sorted),
+            HashedPostStateCursorFactory::new(DatabaseHashedCursorFactory::new(tx), &state_sorted),
+        )
+        .with_prefix_sets(input.prefix_sets.freeze())
+        .root_with_updates()
     }
 }
 

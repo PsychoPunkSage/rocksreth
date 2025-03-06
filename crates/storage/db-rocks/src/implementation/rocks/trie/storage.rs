@@ -2,17 +2,20 @@ use crate::{
     implementation::rocks::tx::RocksTransaction,
     tables::trie::{AccountTrieTable, StorageTrieTable, TrieNibbles, TrieNodeValue, TrieTable},
 };
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{keccak256, Address, B256};
 use eyre::Ok;
 use reth_db_api::transaction::DbTx;
 use reth_db_api::{transaction::DbTxMut, DatabaseError};
 use reth_execution_errors::StateRootError;
 use reth_primitives::Account;
+#[cfg(feature = "metrics")]
+use reth_trie::metrics::{TrieRootMetrics, TrieType};
 use reth_trie::{
     hashed_cursor::{HashedCursorFactory, HashedPostStateCursorFactory},
     trie_cursor::InMemoryTrieCursorFactory,
     updates::TrieUpdates,
-    BranchNodeCompact, HashedPostState, KeccakKeyHasher, StateRoot, StateRootProgress, TrieInput,
+    BranchNodeCompact, HashedPostState, KeccakKeyHasher, StateRoot, StateRootProgress, StorageRoot,
+    TrieInput,
 };
 use reth_trie_db::{
     DatabaseHashedCursorFactory, DatabaseStateRoot, DatabaseStorageRoot, DatabaseTrieCursorFactory,
@@ -210,7 +213,21 @@ impl<'a> DatabaseStorageRoot<'a, RocksTransaction<false>> for &'a RocksTransacti
         address: Address,
         hashed_storage: reth_trie::HashedStorage,
     ) -> Result<B256, reth_execution_errors::StorageRootError> {
-        // Implement storage root calculation
-        todo!()
+        let hashed_address = keccak256(address);
+
+        let prefix_set = hashed_storage.construct_prefix_set().freeze();
+
+        let state_sorted =
+            HashedPostState::from_hashed_storage(hashed_address, hashed_storage).into_sorted();
+
+        StorageRoot::new(
+            DatabaseTrieCursorFactory::new(tx),
+            HashedPostStateCursorFactory::new(DatabaseHashedCursorFactory::new(tx), &state_sorted),
+            address,
+            prefix_set,
+            #[cfg(feature = "metrics")]
+            TrieRootMetrics::new(TrieType::Storage),
+        )
+        .root()
     }
 }

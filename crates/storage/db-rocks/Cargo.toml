@@ -15,7 +15,8 @@ reth-db-api.workspace = true
 reth-db.workspace = true
 reth-codecs.workspace = true
 reth-storage-api.workspace = true
-reth-trie = { workspace = true }
+# reth-trie = { workspace = true }
+reth-trie = { workspace = true, features = ["test-utils"] }
 reth-trie-db = { workspace = true }
 reth-trie-common = { workspace = true }
 alloy-primitives = { workspace = true }
@@ -49,6 +50,9 @@ assert_matches = { workspace = true }
 # reth testing utils
 reth-primitives = { workspace = true, features = ["test-utils"] }
 reth-db-api = { workspace = true }
+
+[features]
+# metrics = ["reth-metrics", "reth-trie/metrics", "dep:metrics"]
 
 [[bench]]
 name = "get"

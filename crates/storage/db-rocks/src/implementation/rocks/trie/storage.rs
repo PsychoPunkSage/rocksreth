@@ -34,7 +34,25 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
         account: B256,
         key: B256,
     ) -> Result<Option<TrieNodeValue>, DatabaseError> {
-        self.get::<StorageTrieTable>((account, key))
+        // self.get::<StorageTrieTable>((account, key))
+        /*
+                error[E0308]: mismatched types
+          --> crates/storage/db-rocks/src/implementation/rocks/trie/storage.rs:37:38
+           |
+        37 |         self.get::<StorageTrieTable>((account, key))
+           |              ----------------------- ^^^^^^^^^^^^^^ expected `FixedBytes<32>`, found `(FixedBytes<32>, ...)`
+           |              |
+           |              arguments to this method are incorrect
+           |
+           = note: expected struct `FixedBytes<32>`
+                       found tuple `(FixedBytes<32>, FixedBytes<32>)`
+        note: method defined here
+          --> /home/psychopunk_sage/dev/Workplace/Supra/reth/crates/storage/db-api/src/transaction.rs:15:8
+           |
+        15 |     fn get<T: Table>(&self, key: T::Key) -> Result<Option<T::Value>, Databas...
+           |        ^^^
+        */
+        todo!("Implement get storage")
     }
 }
 
@@ -47,7 +65,8 @@ impl<'a> DatabaseStateRoot<'a, RocksTransaction<false>> for &'a RocksTransaction
         tx: &'a RocksTransaction<false>,
         range: std::ops::RangeInclusive<u64>,
     ) -> Result<Self, reth_execution_errors::StateRootError> {
-        Ok(tx)
+        // Ok(tx)
+        todo!("Implement incremental root calculator")
     }
 
     fn incremental_root(

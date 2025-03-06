@@ -56,10 +56,16 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
 
     /// Get the column family handle for a table
     fn get_cf<T: Table>(&self) -> Result<Arc<ColumnFamily>, DatabaseError> {
-        self.db
-            .cf_handle(T::NAME)
-            .map(|cf| cf.clone().to_owned())
-            .ok_or_else(|| DatabaseError::Other(format!("Column family not found: {}", T::NAME)))
+        // *** Major issues *** BOUND_COLUMN_FAMILY ???
+        todo!("BOUND_COLUMN_FAMILY")
+        // self.db
+        //     .cf_handle(T::NAME)
+        //     .map(|cf| {
+        //         // Convert BoundColumnFamily to ColumnFamily
+        //         let column_family: ColumnFamily = cf.into();
+        //         Arc::new(column_family)
+        //     })
+        //     .ok_or_else(|| DatabaseError::Other(format!("Column family not found: {}", T::NAME)))
     }
 
     /// Create a trie cursor factory for this transaction
@@ -181,8 +187,7 @@ impl DbTxMut for RocksTransaction<true> {
         if let Some(batch) = &self.batch {
             let mut batch = batch.lock();
             let key_bytes = key.encode();
-            // let value_bytes = value.compress();
-            let value_bytes = value.compress().to_vec();
+            let value_bytes: Vec<u8> = value.compress().into();
             batch.put_cf(cf.as_ref(), key_bytes, value_bytes);
         }
         Ok(())

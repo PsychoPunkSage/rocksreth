@@ -64,32 +64,37 @@ impl DupSortHelper {
 
     pub fn encode_composite_key<T: DupSort>(
         composite_key_vec: Vec<u8>,
-    ) -> Result<T::Key, DatabaseError> {
-        // This implementation will depend on your specific Key type
-        // For example, if T::Key is B256:
-        let key = match T::Key::decode(&composite_key_vec) {
-            Ok(key) => key,
+    ) -> Result<T::Key, DatabaseError>
+    where
+        T::Key: Decode,
+    {
+        match T::Key::decode(&composite_key_vec) {
+            Ok(key) => Ok(key),
             Err(_) => {
-                // If standard decoding fails, try alternative approaches based on your Key type
-                // For B256, you might do:
+                // If standard decoding fails, try alternative approach
                 if composite_key_vec.len() >= 32 {
                     // Take first 32 bytes for B256
                     let mut buffer = [0u8; 32];
                     buffer.copy_from_slice(&composite_key_vec[0..32]);
+
+                    // Try to decode as B256 first
                     match B256::decode(&buffer) {
                         Ok(b256) => {
-                            // Cast to the correct type if B256 is not the exact T::Key type
-                            // This is just an example and might require adjustments
-                            unsafe { std::mem::transmute(b256) }
+                            // Re-encode the B256 to get bytes
+                            let encoded_bytes = b256.encode();
+
+                            // Now try to decode those bytes as T::Key
+                            match T::Key::decode(encoded_bytes.as_ref()) {
+                                Ok(key) => Ok(key),
+                                Err(_) => Err(DatabaseError::Decode),
+                            }
                         }
-                        Err(_) => return Err(DatabaseError::Decode),
+                        Err(_) => Err(DatabaseError::Decode),
                     }
                 } else {
-                    return Err(DatabaseError::Decode);
+                    Err(DatabaseError::Decode)
                 }
             }
-        };
-
-        Ok(key)
+        }
     }
 }

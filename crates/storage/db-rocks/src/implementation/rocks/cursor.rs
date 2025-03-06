@@ -1203,16 +1203,31 @@ where
         key: T::Key,
         subkey: T::SubKey,
     ) -> Result<Option<T::Value>, DatabaseError> {
-        // Clone before operating on them
-        let key_clone = key.clone();
-        let subkey_clone = subkey.clone();
+        // // Clone before operating on them
+        // let key_clone = key.clone();
+        // let subkey_clone = subkey.clone();
 
-        // Assuming T has a static method compose_key
-        let composite_key_vec =
-            DupSortHelper::create_composite_key::<T>(&key_clone, &subkey_clone)?;
+        // // Assuming T has a static method compose_key
+        // let composite_key_vec =
+        //     DupSortHelper::create_composite_key::<T>(&key_clone, &subkey_clone)?;
+        // let encoded_key = DupSortHelper::encode_composite_key::<T>(composite_key_vec)?;
+
+        // // Use the inner cursor to seek to the exact key
+        // let result = self.inner.seek_exact(encoded_key)?;
+
+        // if result.is_some() {
+        //     self.current_key = Some(key);
+        // }
+
+        // Ok(result.map(|(_, v)| v))
+        // Create the composite key directly using the encoded values from key and subkey
+        // Create the composite key
+        let composite_key_vec = DupSortHelper::create_composite_key::<T>(&key, &subkey)?;
+
+        // Convert the Vec<u8> to T::Key using encode_composite_key
         let encoded_key = DupSortHelper::encode_composite_key::<T>(composite_key_vec)?;
 
-        // Use the inner cursor to seek to the exact key
+        // Now pass the properly typed key to seek_exact
         let result = self.inner.seek_exact(encoded_key)?;
 
         if result.is_some() {

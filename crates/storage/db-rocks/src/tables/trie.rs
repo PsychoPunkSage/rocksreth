@@ -42,9 +42,6 @@ impl Table for StorageTrieTable {
     const NAME: &'static str = "storage_trie";
     const DUPSORT: bool = true;
 
-    // type Value = B256; // Storage Value
-    // type Key = StorageTrieKey; // (Account Hash, Storage Hash)
-
     type Key = B256; // (Account hash)
     type Value = TrieNodeValue;
 }

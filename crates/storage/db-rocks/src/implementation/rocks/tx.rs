@@ -9,8 +9,8 @@ use reth_db_api::{
     DatabaseError,
 };
 use rocksdb::{
-    AsColumnFamilyRef, ColumnFamily, ColumnFamilyDescriptor, Options, ReadOptions, WriteBatch,
-    WriteOptions, DB,
+    AsColumnFamilyRef, BoundColumnFamily, ColumnFamily, ColumnFamilyDescriptor, Options,
+    ReadOptions, WriteBatch, WriteOptions, DB,
 };
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -55,17 +55,20 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
     }
 
     /// Get the column family handle for a table
-    fn get_cf<T: Table>(&self) -> Result<Arc<ColumnFamily>, DatabaseError> {
-        // *** Major issues *** BOUND_COLUMN_FAMILY ???
-        todo!("BOUND_COLUMN_FAMILY")
-        // self.db
-        //     .cf_handle(T::NAME)
-        //     .map(|cf| {
-        //         // Convert BoundColumnFamily to ColumnFamily
-        //         let column_family: ColumnFamily = cf.into();
-        //         Arc::new(column_family)
-        //     })
-        //     .ok_or_else(|| DatabaseError::Other(format!("Column family not found: {}", T::NAME)))
+    fn get_cf<T: Table>(&self) -> Result<Arc<BoundColumnFamily>, DatabaseError> {
+        let table_name = T::NAME;
+
+        // Try to get the column family
+        match self.db.cf_handle(table_name) {
+            Some(cf) => Ok(cf),
+            None => Err(DatabaseError::Other(format!("Column family not found: {}", table_name))),
+        }
+    }
+
+    fn cf_to_arc_column_family<'a>(&self, cf: Arc<BoundColumnFamily<'a>>) -> Arc<ColumnFamily> {
+        // We need to use unsafe here because there's no direct conversion
+        // The underlying types are compatible but Rust's type system doesn't know that
+        unsafe { std::mem::transmute(cf) }
     }
 
     /// Create a trie cursor factory for this transaction
@@ -97,7 +100,7 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
     where
         T::Value: Decompress,
     {
-        let cf = self.get_cf::<T>()?;
+        let cf = self.cf_to_arc_column_family(self.get_cf::<T>()?);
         let key_bytes = key.encode();
 
         match self
@@ -120,7 +123,7 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
     where
         T::Value: Decompress,
     {
-        let cf = self.get_cf::<T>()?;
+        let cf = self.cf_to_arc_column_family(self.get_cf::<T>()?);
 
         match self
             .db
@@ -139,7 +142,7 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
     where
         T::Key: Encode + Decode + Clone,
     {
-        RocksCursor::new(self.db.clone(), self.get_cf::<T>()?)
+        RocksCursor::new(self.db.clone(), self.cf_to_arc_column_family(self.get_cf::<T>()?))
     }
 
     fn cursor_dup_read<T: DupSort>(&self) -> Result<Self::DupCursor<T>, DatabaseError>
@@ -147,7 +150,7 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
         T::Key: Encode + Decode + Clone + PartialEq,
         T::SubKey: Encode + Decode + Clone,
     {
-        RocksDupCursor::new(self.db.clone(), self.get_cf::<T>()?)
+        RocksDupCursor::new(self.db.clone(), self.cf_to_arc_column_family(self.get_cf::<T>()?))
     }
 
     fn commit(self) -> Result<bool, DatabaseError> {
@@ -160,7 +163,7 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
     }
 
     fn entries<T: Table>(&self) -> Result<usize, DatabaseError> {
-        let cf = self.get_cf::<T>()?;
+        let cf = self.cf_to_arc_column_family(self.get_cf::<T>()?);
         let mut count = 0;
         let iter = self.db.iterator_cf(cf.as_ref(), rocksdb::IteratorMode::Start);
         for _ in iter {
@@ -183,7 +186,7 @@ impl DbTxMut for RocksTransaction<true> {
     where
         T::Value: Compress,
     {
-        let cf = self.get_cf::<T>()?;
+        let cf = self.cf_to_arc_column_family(self.get_cf::<T>()?);
         if let Some(batch) = &self.batch {
             let mut batch = batch.lock();
             let key_bytes = key.encode();
@@ -198,7 +201,7 @@ impl DbTxMut for RocksTransaction<true> {
         key: T::Key,
         _value: Option<T::Value>,
     ) -> Result<bool, DatabaseError> {
-        let cf = self.get_cf::<T>()?;
+        let cf = self.cf_to_arc_column_family(self.get_cf::<T>()?);
         if let Some(batch) = &self.batch {
             let mut batch = batch.lock();
             let key_bytes = key.encode();
@@ -224,7 +227,7 @@ impl DbTxMut for RocksTransaction<true> {
     where
         T::Key: Encode + Decode + Clone,
     {
-        RocksCursor::new(self.db.clone(), self.get_cf::<T>()?)
+        RocksCursor::new(self.db.clone(), self.cf_to_arc_column_family(self.get_cf::<T>()?))
     }
 
     fn cursor_dup_write<T: DupSort>(&self) -> Result<Self::DupCursorMut<T>, DatabaseError>
@@ -232,7 +235,7 @@ impl DbTxMut for RocksTransaction<true> {
         T::Key: Encode + Decode + Clone + PartialEq,
         T::SubKey: Encode + Decode + Clone,
     {
-        RocksDupCursor::new(self.db.clone(), self.get_cf::<T>()?)
+        RocksDupCursor::new(self.db.clone(), self.cf_to_arc_column_family(self.get_cf::<T>()?))
     }
 }
 

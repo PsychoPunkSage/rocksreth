@@ -1208,11 +1208,12 @@ where
         let subkey_clone = subkey.clone();
 
         // Assuming T has a static method compose_key
-        let composite_key_vec = DupSortHelper::create_composite_key(&key_clone, &subkey_clone);
-        let encoded_key = DupSortHelper::encode_composite_key(composite_key_vec?);
+        let composite_key_vec =
+            DupSortHelper::create_composite_key::<T>(&key_clone, &subkey_clone)?;
+        let encoded_key = DupSortHelper::encode_composite_key::<T>(composite_key_vec)?;
 
         // Use the inner cursor to seek to the exact key
-        let result = self.inner.seek_exact(encoded_key?)?;
+        let result = self.inner.seek_exact(encoded_key)?;
 
         if result.is_some() {
             self.current_key = Some(key);

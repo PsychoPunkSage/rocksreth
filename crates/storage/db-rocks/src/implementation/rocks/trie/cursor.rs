@@ -1,15 +1,17 @@
 use super::super::dupsort::DupSortHelper;
 use crate::implementation::rocks::cursor::RocksCursor;
-use crate::tables::trie::{AccountTrieTable, StorageTrieTable, TrieNodeValue, TrieTable};
+use crate::tables::trie::{
+    AccountTrieTable, StorageTrieTable, TrieNibbles, TrieNodeValue, TrieTable,
+};
 use crate::RocksTransaction;
-use alloy_primitives::B256;
+use alloy_primitives::{FixedBytes, B256};
 use reth_db::transaction::DbTx;
 use reth_db_api::{cursor::DbCursorRO, DatabaseError};
 use reth_trie::{
     hashed_cursor::{HashedCursor, HashedCursorFactory},
     trie_cursor::{TrieCursor, TrieCursorFactory},
 };
-use reth_trie::{BranchNodeCompact, Nibbles}; // For encoding/decoding
+use reth_trie::{BranchNodeCompact, Nibbles, TrieMask}; // For encoding/decoding
 use reth_trie_common::{StoredNibbles, StoredNibblesSubKey};
 use rocksdb::{ColumnFamily, Direction, IteratorMode, ReadOptions, DB};
 
@@ -39,15 +41,33 @@ impl<'tx> RocksAccountTrieCursor<'tx> {
 }
 
 impl<'tx> RocksStorageTrieCursor<'tx> {
-    pub fn new(cursor: Box<dyn DbCursorRO<StorageTrieTable> + 'tx>, hashed_address: B256) -> Self {
+    pub fn new(
+        cursor: Box<dyn DbCursorRO<StorageTrieTable> + Send + Sync + 'tx>,
+        hashed_address: B256,
+    ) -> Self {
         Self { cursor, hashed_address, current_key: None }
     }
 
-    // Helper method to convert TrieNodeValue to BranchNodeCompact
+    // Helper method to convert TrieNodeValue to BranchNodeCompact :::> BETTER TO HAVE IT REMOVED
     fn value_to_branch_node(value: TrieNodeValue) -> Result<BranchNodeCompact, DatabaseError> {
         // Placeholder implementation - need to implement this based on your specific data model
         // This might involve RLP decoding or other transformations
-        let branch_node = BranchNodeCompact::from_hash(value.node);
+        // let branch_node = BranchNodeCompact::from_hash(value.node);
+        // Ok(branch_node)
+        let state_mask = TrieMask::new(0);
+        let tree_mask = TrieMask::new(0);
+        let hash_mask = TrieMask::new(0);
+
+        // No hashes in this minimal representation
+        let hashes = Vec::new();
+
+        // Use the node hash from the value as the root hash
+        let root_hash = Some(value.node);
+
+        // Create a new BranchNodeCompact with these values
+        let branch_node =
+            BranchNodeCompact::new(state_mask, tree_mask, hash_mask, hashes, root_hash);
+
         Ok(branch_node)
     }
 }
@@ -61,7 +81,7 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
         let mut cursor: RocksCursor<AccountTrieTable, false> =
             self.tx.cursor_read::<AccountTrieTable>()?;
 
-        let res = cursor.seek_exact(StoredNibbles(key.clone()))?.map(|val| (val.0 .0, val.1));
+        let res = cursor.seek_exact(TrieNibbles(key.clone()))?.map(|val| (val.0 .0, val.1));
 
         if let Some((found_key, _)) = &res {
             self.current_key = Some(found_key.clone());
@@ -81,7 +101,7 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
             self.tx.cursor_read::<AccountTrieTable>()?;
 
         // Use seek with StoredNibbles
-        let res = cursor.seek(StoredNibbles(key))?.map(|val| (val.0 .0, val.1));
+        let res = cursor.seek(TrieNibbles(key))?.map(|val| (val.0 .0, val.1));
 
         if let Some((found_key, _)) = &res {
             self.current_key = Some(found_key.clone());
@@ -99,7 +119,7 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
 
         // if have current key ? Position cursor
         if let Some(current) = &self.current_key {
-            if let Some(_) = cursor.seek(StoredNibbles(current.clone()))? {
+            if let Some(_) = cursor.seek(TrieNibbles(current.clone()))? {
                 // Move to next entry after current
                 cursor.next()?
             } else {
@@ -140,13 +160,16 @@ impl<'tx> TrieCursor for RocksStorageTrieCursor<'tx> {
         let composite_key_vec =
             DupSortHelper::create_composite_key::<StorageTrieTable>(&self.hashed_address, &subkey)?;
 
-        let composite_key = FixedBytes::<32>::try_from(composite_key_vec.as_slice())
-            .map_err(|_| anyhow::anyhow!("Failed to convert Vec<u8> to FixedBytes<32>"))?;
+        let composite_key =
+            FixedBytes::<32>::try_from(composite_key_vec.as_slice()).map_err(|_| {
+                DatabaseError::Other(format!("Failed to convert Vec<u8> to FixedBytes<32>"))
+            })?;
 
         // Use seek_exact with the composite key
         if let Some((_, value)) = self.cursor.seek_exact(composite_key)? {
-            self.current_key = Some(value.nibbles.0.clone());
-            return Ok(Some((value.nibbles.0, Self::value_to_branch_node(value)?)));
+            let nibbles = value.nibbles.0.clone();
+            self.current_key = Some(nibbles.clone());
+            return Ok(Some((nibbles, Self::value_to_branch_node(value)?)));
         }
 
         self.current_key = None;
@@ -160,8 +183,9 @@ impl<'tx> TrieCursor for RocksStorageTrieCursor<'tx> {
         // Create prefix for scanning all entries with this account hash
         let prefix_vec = DupSortHelper::create_prefix::<StorageTrieTable>(&self.hashed_address)?;
 
-        let prefix = FixedBytes::<32>::try_from(prefix_vec.as_slice())
-            .map_err(|_| anyhow::anyhow!("Failed to convert Vec<u8> to FixedBytes<32>"))?;
+        let prefix = FixedBytes::<32>::try_from(prefix_vec.as_slice()).map_err(|_| {
+            DatabaseError::Other(format!("Failed to convert Vec<u8> to FixedBytes<32>"))
+        })?;
 
         // Seek to the first entry with this prefix
         if let Some((_, value)) = self.cursor.seek(prefix)? {

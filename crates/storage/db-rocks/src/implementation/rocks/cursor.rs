@@ -587,6 +587,8 @@ use std::ops::RangeBounds;
 use std::result::Result::Ok;
 use std::sync::Arc;
 
+use super::dupsort::DupSortHelper;
+
 /// RocksDB cursor implementation
 pub struct RocksCursor<T: Table, const WRITE: bool> {
     db: Arc<DB>,
@@ -1206,8 +1208,11 @@ where
         let subkey_clone = subkey.clone();
 
         // Assuming T has a static method compose_key
-        let composite_key = T::compose_key(&key_clone, &subkey_clone);
-        let result = self.inner.seek_exact(composite_key)?;
+        let composite_key_vec = DupSortHelper::create_composite_key(&key_clone, &subkey_clone);
+        let encoded_key = DupSortHelper::encode_composite_key(composite_key_vec?);
+
+        // Use the inner cursor to seek to the exact key
+        let result = self.inner.seek_exact(encoded_key?)?;
 
         if result.is_some() {
             self.current_key = Some(key);
@@ -1224,24 +1229,44 @@ where
     where
         Self: Sized,
     {
-        match (key.clone(), subkey.clone()) {
+        // match (key.clone(), subkey.clone()) {
+        //     (Some(k), Some(sk)) => {
+        //         let _ = self.seek_by_key_subkey(k.clone(), sk)?;
+        //         self.current_key = Some(k);
+        //     }
+        //     (Some(k), None) => {
+        //         let _ = self.seek(k.clone())?;
+        //         self.current_key = Some(k);
+        //     }
+        //     (None, Some(_)) => {
+        //         let _ = self.first()?;
+        //     }
+        //     (None, None) => {
+        //         let _ = self.first()?;
+        //     }
+        // }
+        let start = match (key.clone(), subkey.clone()) {
             (Some(k), Some(sk)) => {
                 let _ = self.seek_by_key_subkey(k.clone(), sk)?;
                 self.current_key = Some(k);
+                self.current().transpose()
             }
             (Some(k), None) => {
                 let _ = self.seek(k.clone())?;
                 self.current_key = Some(k);
+                self.current().transpose()
             }
             (None, Some(_)) => {
                 let _ = self.first()?;
+                self.current().transpose()
             }
             (None, None) => {
                 let _ = self.first()?;
+                self.current().transpose()
             }
-        }
+        };
 
-        Ok(DupWalker::new(self))
+        Ok(DupWalker { cursor: self, start })
     }
 }
 

@@ -3,6 +3,7 @@ use crate::tables::codecs::trie::TrieNodeCodec;
 use crate::tables::TableConfig;
 use alloy_primitives::B256;
 // use reth_db_api::table::DupSort;
+use reth_codecs::Compact;
 use reth_db_api::table::{Decode, DupSort, Encode, Table};
 use reth_primitives::Account;
 use reth_trie::{BranchNodeCompact, Nibbles}; // For encoding/decoding
@@ -158,19 +159,43 @@ impl reth_db_api::table::Compress for TrieNodeValue {
     type Compressed = Vec<u8>;
 
     fn compress(self) -> Vec<u8> {
-        // WILL Properly implement later
-        self.encode()
+        let mut buf = Vec::new();
+        self.compress_to_buf(&mut buf);
+        buf
     }
 
     fn compress_to_buf<B: bytes::BufMut + AsMut<[u8]>>(&self, buf: &mut B) {
-        todo!("Will do later")
+        // Then write the nibbles using Compact trait
+        self.nibbles.to_compact(buf);
+
+        // Finally encode the node hash (B256)
+        buf.put_slice(self.node.as_ref());
     }
 }
 
 impl reth_db_api::table::Decompress for TrieNodeValue {
     fn decompress(bytes: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
-        // Will implement it properly later
-        Self::decode(bytes)
+        if bytes.is_empty() {
+            return Err(reth_db_api::DatabaseError::Decode);
+        }
+
+        // Since we can't directly use the private reth_codecs::decode_varuint function,
+        // we'll decode bytes in a way that's compatible with our encoding above.
+
+        // Decode the nibbles using Compact's from_compact
+        // The StoredNibbles::from_compact will advance the buffer correctly
+        let (nibbles, remaining) = StoredNibbles::from_compact(bytes, bytes.len() - 32);
+
+        // Check if we have enough bytes left for the node hash (B256 = 32 bytes)
+        if remaining.len() < 32 {
+            return Err(reth_db_api::DatabaseError::Decode);
+        }
+
+        // Extract and convert the node hash
+        let mut node = B256::default();
+        <B256 as AsMut<[u8]>>::as_mut(&mut node).copy_from_slice(&remaining[..32]);
+
+        Ok(TrieNodeValue { nibbles, node })
     }
 }
 

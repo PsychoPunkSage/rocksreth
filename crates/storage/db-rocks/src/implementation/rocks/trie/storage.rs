@@ -4,8 +4,11 @@ use crate::{
 };
 use alloy_primitives::{keccak256, Address, B256};
 use eyre::Ok;
-use reth_db_api::transaction::DbTx;
-use reth_db_api::{transaction::DbTxMut, DatabaseError};
+use reth_db_api::{
+    cursor::{DbCursorRO, DbDupCursorRO},
+    transaction::{DbTx, DbTxMut},
+    DatabaseError,
+};
 use reth_execution_errors::StateRootError;
 use reth_primitives::Account;
 #[cfg(feature = "metrics")]
@@ -15,7 +18,7 @@ use reth_trie::{
     trie_cursor::InMemoryTrieCursorFactory,
     updates::TrieUpdates,
     BranchNodeCompact, HashedPostState, KeccakKeyHasher, StateRoot, StateRootProgress, StorageRoot,
-    TrieInput,
+    StoredNibbles, TrieInput,
 };
 use reth_trie_db::{
     DatabaseHashedCursorFactory, DatabaseStateRoot, DatabaseStorageRoot, DatabaseTrieCursorFactory,
@@ -42,30 +45,28 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
     pub fn get_storage(
         &self,
         account: B256,
-        key: B256,
+        key: StoredNibbles,
     ) -> Result<Option<TrieNodeValue>, DatabaseError> {
-        // self.get::<StorageTrieTable>((account, key))
-        /*
-                error[E0308]: mismatched types
-          --> crates/storage/db-rocks/src/implementation/rocks/trie/storage.rs:37:38
-           |
-        37 |         self.get::<StorageTrieTable>((account, key))
-           |              ----------------------- ^^^^^^^^^^^^^^ expected `FixedBytes<32>`, found `(FixedBytes<32>, ...)`
-           |              |
-           |              arguments to this method are incorrect
-           |
-           = note: expected struct `FixedBytes<32>`
-                       found tuple `(FixedBytes<32>, FixedBytes<32>)`
-        note: method defined here
-          --> /home/psychopunk_sage/dev/Workplace/Supra/reth/crates/storage/db-api/src/transaction.rs:15:8
-           |
-        15 |     fn get<T: Table>(&self, key: T::Key) -> Result<Option<T::Value>, Databas...
-           |        ^^^
-        */
-        todo!("Implement get storage")
+        // Create a cursor for the StorageTrieTable
+        let mut cursor = self.cursor_dup_read::<StorageTrieTable>()?;
+
+        // First seek to the account hash
+        if let Some((found_account, _)) = cursor.seek(account)? {
+            // If we found the account, check if it's the one we're looking for
+            if found_account == account {
+                // Now seek to the specific storage key (which is the subkey)
+                return cursor
+                    .seek_by_key_subkey(account, key)?
+                    .map(|value| Ok(Some(value)))
+                    .unwrap_or(Ok(None))
+                    .map_err(|e| DatabaseError::Other(format!("ErrReport: {:?}", e)));
+            }
+        }
+
+        // Account not found or no matching storage key
+        Ok(None).map_err(|e| DatabaseError::Other(format!("ErrReport: {:?}", e)))
     }
 }
-
 impl<'a> DatabaseStateRoot<'a, RocksTransaction<false>> for &'a RocksTransaction<false> {
     fn from_tx(tx: &'a RocksTransaction<false>) -> Self {
         tx

@@ -1,8 +1,5 @@
-use super::codecs::trie::StorageTrieKey;
-use crate::tables::codecs::trie::TrieNodeCodec;
 use crate::tables::TableConfig;
 use alloy_primitives::B256;
-// use reth_db_api::table::DupSort;
 use reth_codecs::Compact;
 use reth_db_api::table::{Decode, DupSort, Encode, Table};
 use reth_primitives::Account;

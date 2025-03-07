@@ -1,4 +1,3 @@
-pub mod codecs;
 pub mod raw;
 pub mod trie;
 pub mod utils;

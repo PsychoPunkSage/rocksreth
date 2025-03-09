@@ -9,6 +9,7 @@ repository.workspace = true
 exclude.workspace = true
 
 [dependencies]
+
 # reth dependencies
 reth-primitives.workspace = true
 reth-db-api.workspace = true
@@ -39,6 +40,8 @@ tracing = { workspace = true }
 # utility
 thiserror = { workspace = true }
 parking_lot = { workspace = true }
+
+tempfile = "3.8"
 
 [dev-dependencies]
 # testing

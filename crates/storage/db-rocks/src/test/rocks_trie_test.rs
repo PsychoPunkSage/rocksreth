@@ -186,5 +186,62 @@ fn test_cursor_navigation() {
     assert_eq!(last.as_ref().unwrap().0, keys[4]);
 }
 
-// #[test]
-// fn test_dupsort_cursor_navigation() {}
+#[test]
+fn test_dupsort_cursor_navigation() {
+    let (db, _temp_dir) = create_test_db();
+
+    // Create a writable transaction
+    let tx = RocksTransaction::<true>::new(db.clone(), true);
+
+    // Create a test account hash
+    let account_hash = B256::from([1; 32]);
+
+    // Insert multiple storage trie nodes for the same account
+    let mut subkeys = Vec::new();
+    let mut values = Vec::new();
+
+    for i in 0..5 {
+        let nibbles = Nibbles::from_nibbles(&[i, i + 1, i + 2]);
+        let subkey = StoredNibbles(nibbles);
+        subkeys.push(subkey.clone());
+
+        let node_hash = B256::from([1; 32]);
+        let value = TrieNodeValue { nibbles: subkey.clone(), node: node_hash };
+        values.push(value.clone());
+
+        let mut cursor = tx.cursor_dup_write::<StorageTrieTable>().unwrap();
+        cursor.append_dup(account_hash, value).unwrap();
+    }
+
+    // Commit the transaction
+    tx.commit().unwrap();
+
+    // Create a read transaction
+    let read_tx = RocksTransaction::<false>::new(db, false);
+
+    // Test dupsort cursor navigation
+    let mut cursor = read_tx.cursor_dup_read::<StorageTrieTable>().unwrap();
+
+    // Seek to the account hash
+    let seek_result = cursor.seek(account_hash).unwrap();
+    assert!(seek_result.is_some());
+
+    // Test next_dup() to iterate through all values for this key
+    let mut count = 0;
+    while cursor.next_dup().unwrap().is_some() {
+        count += 1;
+    }
+
+    // We should have found (n-1) more entries (n total minus the one we already got with seek)
+    assert_eq!(count, 4);
+
+    // Test seek_by_key_subkey()
+    for (i, subkey) in subkeys.iter().enumerate() {
+        let result = cursor.seek_by_key_subkey(account_hash, subkey.clone()).unwrap();
+        assert!(result.is_some());
+
+        let retrieved_value = result.unwrap();
+        assert_eq!(retrieved_value.nibbles.0, subkey.0);
+        assert_eq!(retrieved_value.node, values[i].node);
+    }
+}

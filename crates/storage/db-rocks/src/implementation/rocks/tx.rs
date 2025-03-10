@@ -154,7 +154,15 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
     }
 
     fn commit(self) -> Result<bool, DatabaseError> {
-        // For read-only transactions, just drop
+        // if WRITE {
+        //     if let Some(batch) = &self.batch {
+        //         let batch_guard = batch.lock();
+        //         self.db.write_opt(batch_guard, &self.write_opts).map_err(|e| {
+        //             DatabaseError::Other(format!("Failed to commit transaction: {}", e))
+        //         })?;
+        //     }
+        // }
+        // For both read-only and write transactions after committing, just drop
         Ok(true)
     }
 

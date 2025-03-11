@@ -1,6 +1,5 @@
 use crate::implementation::rocks::cursor::{RocksCursor, RocksDupCursor};
 use crate::implementation::rocks::trie::RocksTrieCursorFactory;
-use parking_lot::Mutex;
 use reth_db_api::table::TableImporter;
 use reth_db_api::{
     cursor::{DbCursorRO, DbCursorRW, DbDupCursorRO, DbDupCursorRW},
@@ -14,6 +13,7 @@ use rocksdb::{
 };
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::sync::{Mutex, MutexGuard};
 
 /// Generic transaction type for RocksDB
 pub struct RocksTransaction<const WRITE: bool> {
@@ -154,14 +154,27 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
     }
 
     fn commit(self) -> Result<bool, DatabaseError> {
-        // if WRITE {
-        //     if let Some(batch) = &self.batch {
-        //         let batch_guard = batch.lock();
-        //         self.db.write_opt(batch_guard, &self.write_opts).map_err(|e| {
-        //             DatabaseError::Other(format!("Failed to commit transaction: {}", e))
-        //         })?;
-        //     }
-        // }
+        if WRITE {
+            if let Some(batch) = &self.batch {
+                let mut batch_guard = match batch.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+
+                // Create a new empty batch
+                let empty_batch = WriteBatch::default();
+
+                // Swap the empty batch with the current one to get ownership
+                let real_batch = std::mem::replace(&mut *batch_guard, empty_batch);
+
+                // Drop the guard before writing to avoid deadlocks
+                drop(batch_guard);
+
+                self.db.write_opt(real_batch, &self.write_opts).map_err(|e| {
+                    DatabaseError::Other(format!("Failed to commit transaction: {}", e))
+                })?;
+            }
+        }
         // For both read-only and write transactions after committing, just drop
         Ok(true)
     }
@@ -196,10 +209,13 @@ impl DbTxMut for RocksTransaction<true> {
     {
         let cf = self.cf_to_arc_column_family(self.get_cf::<T>()?);
         if let Some(batch) = &self.batch {
-            let mut batch = batch.lock();
+            let mut batch_guard = match batch.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             let key_bytes = key.encode();
             let value_bytes: Vec<u8> = value.compress().into();
-            batch.put_cf(cf.as_ref(), key_bytes, value_bytes);
+            batch_guard.put_cf(cf.as_ref(), key_bytes, value_bytes);
         }
         Ok(())
     }
@@ -211,9 +227,12 @@ impl DbTxMut for RocksTransaction<true> {
     ) -> Result<bool, DatabaseError> {
         let cf = self.cf_to_arc_column_family(self.get_cf::<T>()?);
         if let Some(batch) = &self.batch {
-            let mut batch = batch.lock();
+            let mut batch_guard = match batch.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             let key_bytes = key.encode();
-            batch.delete_cf(cf.as_ref(), key_bytes);
+            batch_guard.delete_cf(cf.as_ref(), key_bytes);
         }
         Ok(true)
     }

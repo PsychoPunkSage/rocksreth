@@ -269,6 +269,51 @@ fn test_transaction_abort() {
     assert!(read_tx.get::<AccountTrieTable>(key.clone()).unwrap().is_none());
 }
 
+#[test]
+fn test_large_keys_and_values() {
+    let (db, _temp_dir) = create_test_db();
+
+    // Create a writable transaction
+    let tx = RocksTransaction::<true>::new(db.clone(), true);
+
+    // Create a large key (many nibbles)
+    let mut nibble_vec = Vec::new();
+    for i in 0..100 {
+        nibble_vec.push(i % 16);
+    }
+    let large_nibbles = Nibbles::from_nibbles(&nibble_vec);
+    let large_key = TrieNibbles(large_nibbles);
+
+    // Create a value with many hash entries
+    let state_mask = TrieMask::new(0xFFFF); // All bits set
+    let tree_mask = TrieMask::new(0xFFFF);
+    let hash_mask = TrieMask::new(0xFFFF);
+
+    // Generate lots of hashes
+    let mut hashes = Vec::new();
+    for i in 0..16 {
+        hashes.push(B256::from([i as u8; 32]));
+    }
+
+    let large_node = BranchNodeCompact::new(
+        state_mask,
+        tree_mask,
+        hash_mask,
+        hashes,
+        Some(B256::from([255; 32])),
+    );
+
+    // Insert the large key-value pair
+    tx.put::<AccountTrieTable>(large_key.clone(), large_node.clone()).unwrap();
+    tx.commit().unwrap();
+
+    // Verify we can retrieve it correctly
+    let read_tx = RocksTransaction::<false>::new(db.clone(), false);
+    let result = read_tx.get::<AccountTrieTable>(large_key).unwrap();
+    assert!(result.is_some());
+    assert_eq!(result.unwrap(), large_node);
+}
+
 // fn test_dupsort_cursor_navigation() {
 //     let (db, _temp_dir) = create_test_db();
 

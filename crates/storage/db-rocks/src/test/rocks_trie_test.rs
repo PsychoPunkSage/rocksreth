@@ -314,6 +314,52 @@ fn test_large_keys_and_values() {
     assert_eq!(result.unwrap(), large_node);
 }
 
+#[test]
+fn test_update_existing_key() {
+    let (db, _temp_dir) = create_test_db();
+
+    // Create initial transaction
+    let tx1 = RocksTransaction::<true>::new(db.clone(), true);
+
+    // Create test key
+    let nibbles = Nibbles::from_nibbles(&[1, 3, 5, 7, 9]);
+    let key = TrieNibbles(nibbles);
+
+    // Create initial value
+    let initial_value = create_test_branch_node();
+
+    // Insert initial key-value pair
+    tx1.put::<AccountTrieTable>(key.clone(), initial_value.clone()).unwrap();
+    tx1.commit().unwrap();
+
+    // Create second transaction to update the value
+    let tx2 = RocksTransaction::<true>::new(db.clone(), true);
+
+    // Create new value with different root hash
+    let state_mask = TrieMask::new(0);
+    let tree_mask = TrieMask::new(0);
+    let hash_mask = TrieMask::new(0);
+    let hashes = Vec::new();
+    let updated_root_hash = Some(B256::from([42; 32])); // Different hash
+
+    let updated_value =
+        BranchNodeCompact::new(state_mask, tree_mask, hash_mask, hashes, updated_root_hash);
+
+    // Update the value for the same key
+    tx2.put::<AccountTrieTable>(key.clone(), updated_value.clone()).unwrap();
+    tx2.commit().unwrap();
+
+    // Verify the value was updated
+    let read_tx = RocksTransaction::<false>::new(db.clone(), false);
+    let result = read_tx.get::<AccountTrieTable>(key).unwrap();
+    assert!(result.is_some());
+
+    let retrieved_value = result.unwrap();
+    assert_eq!(retrieved_value, updated_value);
+    assert_ne!(retrieved_value, initial_value);
+    assert_eq!(retrieved_value.root_hash, updated_root_hash);
+}
+
 // fn test_dupsort_cursor_navigation() {
 //     let (db, _temp_dir) = create_test_db();
 

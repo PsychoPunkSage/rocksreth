@@ -246,6 +246,29 @@ fn test_empty_values() {
     assert_eq!(result.unwrap(), empty_val);
 }
 
+#[test]
+fn test_transaction_abort() {
+    let (db, _temp_dir) = create_test_db();
+
+    // Create a writable transaction
+    let tx = RocksTransaction::<true>::new(db.clone(), true);
+
+    // Create test key and value
+    let nibbles = Nibbles::from_nibbles(&[9, 8, 7, 6, 5]);
+    let key = TrieNibbles(nibbles);
+    let value = create_test_branch_node();
+
+    // Insert the key-value pair
+    tx.put::<AccountTrieTable>(key.clone(), value.clone()).unwrap();
+
+    // Abort the transaction instead of committing
+    tx.abort();
+
+    // Verify the data was not persisted
+    let read_tx = RocksTransaction::<false>::new(db.clone(), false);
+    assert!(read_tx.get::<AccountTrieTable>(key.clone()).unwrap().is_none());
+}
+
 // fn test_dupsort_cursor_navigation() {
 //     let (db, _temp_dir) = create_test_db();
 

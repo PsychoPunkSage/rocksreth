@@ -181,6 +181,7 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
 
     fn abort(self) {
         // For read-only transactions, just drop
+        // PPS:: Should we leave it as is??
     }
 
     fn entries<T: Table>(&self) -> Result<usize, DatabaseError> {

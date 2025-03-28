@@ -10,7 +10,7 @@ use rocksdb::{AsColumnFamilyRef, ColumnFamily, Direction, IteratorMode, ReadOpti
 use std::ops::Bound;
 use std::ops::RangeBounds;
 use std::result::Result::Ok;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::dupsort::DupSortHelper;
 
@@ -447,7 +447,6 @@ where
         Ok(Self { inner: RocksCursor::new(db, cf)?, current_key: None })
     }
 }
-
 impl<T: DupSort, const WRITE: bool> DbCursorRO<T> for RocksDupCursor<T, WRITE>
 where
     T::Key: Encode + Decode + Clone + PartialEq,
@@ -723,5 +722,373 @@ where
     fn append_dup(&mut self, key: T::Key, value: T::Value) -> Result<(), DatabaseError> {
         // Note: append_dup takes ownership of value, but inner.append expects a reference
         self.inner.append(key, &value)
+    }
+}
+
+pub struct ThreadSafeRocksCursor<T: Table, const WRITE: bool> {
+    cursor: Mutex<RocksCursor<T, WRITE>>,
+}
+
+impl<T: Table, const WRITE: bool> ThreadSafeRocksCursor<T, WRITE> {
+    pub fn new(cursor: RocksCursor<T, WRITE>) -> Self {
+        Self { cursor: Mutex::new(cursor) }
+    }
+}
+
+impl<T: Table, const WRITE: bool> DbCursorRO<T> for ThreadSafeRocksCursor<T, WRITE>
+where
+    T::Key: Encode + Decode + Clone + PartialEq,
+    T::Value: Decompress,
+{
+    fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.first()
+    }
+
+    fn seek_exact(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.seek_exact(key)
+    }
+
+    fn seek(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.seek(key)
+    }
+
+    fn next(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.next()
+    }
+
+    fn prev(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.prev()
+    }
+
+    fn last(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.last()
+    }
+
+    fn current(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.current()
+    }
+
+    fn walk(&mut self, start_key: Option<T::Key>) -> Result<Walker<'_, T, Self>, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let start = if let Some(key) = start_key { self.seek(key)? } else { self.first()? };
+
+        // Convert to expected type for Walker::new
+        let iter_pair_result = match start {
+            Some(val) => Some(Ok(val)),
+            None => None,
+        };
+
+        Ok(Walker::new(self, iter_pair_result))
+    }
+
+    fn walk_range(
+        &mut self,
+        range: impl RangeBounds<T::Key>,
+    ) -> Result<RangeWalker<'_, T, Self>, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let start = match range.start_bound() {
+            Bound::Included(key) => self.seek(key.clone())?,
+            Bound::Excluded(key) => {
+                let mut pos = self.seek(key.clone())?;
+                if pos.is_some() {
+                    pos = self.next()?;
+                }
+                pos
+            }
+            Bound::Unbounded => self.first()?,
+        };
+
+        let end_bound = match range.end_bound() {
+            Bound::Included(key) => Bound::Included(key.clone()),
+            Bound::Excluded(key) => Bound::Excluded(key.clone()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        // Convert to expected type for RangeWalker::new
+        let iter_pair_result = match start {
+            Some(val) => Some(Ok(val)),
+            None => None,
+        };
+
+        Ok(RangeWalker::new(self, iter_pair_result, end_bound))
+    }
+
+    fn walk_back(
+        &mut self,
+        start_key: Option<T::Key>,
+    ) -> Result<ReverseWalker<'_, T, Self>, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let start = if let Some(key) = start_key { self.seek(key)? } else { self.last()? };
+
+        // Convert to expected type for ReverseWalker::new
+        let iter_pair_result = match start {
+            Some(val) => Some(Ok(val)),
+            None => None,
+        };
+
+        Ok(ReverseWalker::new(self, iter_pair_result))
+    }
+}
+
+impl<T: Table> DbCursorRW<T> for ThreadSafeRocksCursor<T, true>
+where
+    T::Key: Encode + Decode + Clone,
+    T::Value: Compress + Decompress,
+{
+    fn upsert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.upsert(key, value)
+    }
+
+    fn insert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.insert(key, value)
+    }
+
+    fn append(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.append(key, value)
+    }
+
+    fn delete_current(&mut self) -> Result<(), DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.delete_current()
+    }
+}
+
+pub struct ThreadSafeRocksDupCursor<T: DupSort, const WRITE: bool> {
+    cursor: Mutex<RocksDupCursor<T, WRITE>>,
+}
+
+impl<T: DupSort, const WRITE: bool> ThreadSafeRocksDupCursor<T, WRITE> {
+    pub fn new(cursor: RocksDupCursor<T, WRITE>) -> Self {
+        Self { cursor: Mutex::new(cursor) }
+    }
+}
+
+impl<T: DupSort, const WRITE: bool> DbCursorRO<T> for ThreadSafeRocksDupCursor<T, WRITE>
+where
+    T::Key: Encode + Decode + Clone + PartialEq,
+    T::Value: Decompress,
+    T::SubKey: Encode + Decode + Clone,
+{
+    fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.first()
+    }
+
+    fn seek_exact(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.seek_exact(key)
+    }
+
+    fn seek(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.seek(key)
+    }
+
+    fn next(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.next()
+    }
+
+    fn prev(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.prev()
+    }
+
+    fn last(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.last()
+    }
+
+    fn current(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.current()
+    }
+
+    fn walk(&mut self, start_key: Option<T::Key>) -> Result<Walker<'_, T, Self>, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let start = if let Some(key) = start_key { self.seek(key)? } else { self.first()? };
+
+        // Convert to expected type for Walker::new
+        let iter_pair_result = match start {
+            Some(val) => Some(Ok(val)),
+            None => None,
+        };
+
+        Ok(Walker::new(self, iter_pair_result))
+    }
+
+    fn walk_range(
+        &mut self,
+        range: impl RangeBounds<T::Key>,
+    ) -> Result<RangeWalker<'_, T, Self>, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let start = match range.start_bound() {
+            Bound::Included(key) => self.seek(key.clone())?,
+            Bound::Excluded(key) => {
+                let mut pos = self.seek(key.clone())?;
+                if pos.is_some() {
+                    pos = self.next()?;
+                }
+                pos
+            }
+            Bound::Unbounded => self.first()?,
+        };
+
+        let end_bound = match range.end_bound() {
+            Bound::Included(key) => Bound::Included(key.clone()),
+            Bound::Excluded(key) => Bound::Excluded(key.clone()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        // Convert to expected type for RangeWalker::new
+        let iter_pair_result = match start {
+            Some(val) => Some(Ok(val)),
+            None => None,
+        };
+
+        Ok(RangeWalker::new(self, iter_pair_result, end_bound))
+    }
+
+    fn walk_back(
+        &mut self,
+        start_key: Option<T::Key>,
+    ) -> Result<ReverseWalker<'_, T, Self>, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let start = if let Some(key) = start_key { self.seek(key)? } else { self.last()? };
+
+        // Convert to expected type for ReverseWalker::new
+        let iter_pair_result = match start {
+            Some(val) => Some(Ok(val)),
+            None => None,
+        };
+
+        Ok(ReverseWalker::new(self, iter_pair_result))
+    }
+}
+
+impl<T: DupSort, const WRITE: bool> DbDupCursorRO<T> for ThreadSafeRocksDupCursor<T, WRITE>
+where
+    T::Key: Encode + Decode + Clone + PartialEq,
+    T::Value: Decompress,
+    T::SubKey: Encode + Decode + Clone,
+{
+    fn next_dup(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.next_dup()
+    }
+
+    fn next_no_dup(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.next_no_dup()
+    }
+
+    fn next_dup_val(&mut self) -> Result<Option<T::Value>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.next_dup_val()
+    }
+
+    fn seek_by_key_subkey(
+        &mut self,
+        key: T::Key,
+        subkey: T::SubKey,
+    ) -> Result<Option<T::Value>, DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.seek_by_key_subkey(key, subkey)
+    }
+
+    fn walk_dup(
+        &mut self,
+        key: Option<T::Key>,
+        subkey: Option<T::SubKey>,
+    ) -> Result<DupWalker<'_, T, Self>, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let start = match (key.clone(), subkey.clone()) {
+            (Some(k), Some(sk)) => {
+                let _ = self.seek_by_key_subkey(k.clone(), sk)?;
+                self.current().transpose()
+            }
+            (Some(k), None) => {
+                let _ = self.seek(k.clone())?;
+                self.current().transpose()
+            }
+            (None, Some(_)) => {
+                let _ = self.first()?;
+                self.current().transpose()
+            }
+            (None, None) => {
+                let _ = self.first()?;
+                self.current().transpose()
+            }
+        };
+
+        Ok(DupWalker { cursor: self, start })
+    }
+}
+
+impl<T: DupSort> DbDupCursorRW<T> for ThreadSafeRocksDupCursor<T, true>
+where
+    T::Key: Encode + Decode + Clone + PartialEq,
+    T::Value: Compress + Decompress,
+    T::SubKey: Encode + Decode + Clone,
+{
+    fn delete_current_duplicates(&mut self) -> Result<(), DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.delete_current_duplicates()
+    }
+
+    fn append_dup(&mut self, key: T::Key, value: T::Value) -> Result<(), DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.append_dup(key, value)
+    }
+}
+
+impl<T: DupSort> DbCursorRW<T> for ThreadSafeRocksDupCursor<T, true>
+where
+    T::Key: Encode + Decode + Clone + PartialEq,
+    T::Value: Compress + Decompress,
+    T::SubKey: Encode + Decode + Clone,
+{
+    fn upsert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.upsert(key, value)
+    }
+
+    fn insert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.insert(key, value)
+    }
+
+    fn append(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.append(key, value)
+    }
+
+    fn delete_current(&mut self) -> Result<(), DatabaseError> {
+        let mut cursor_guard = self.cursor.lock().unwrap();
+        cursor_guard.delete_current()
     }
 }

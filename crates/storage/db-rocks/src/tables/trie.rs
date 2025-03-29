@@ -1,11 +1,8 @@
-use crate::tables::TableConfig;
 use alloy_primitives::B256;
 use reth_codecs::Compact;
 use reth_db_api::table::{Decode, DupSort, Encode, Table};
-use reth_primitives::Account;
 use reth_trie::{BranchNodeCompact, Nibbles}; // For encoding/decoding
-use reth_trie_common::{StoredNibbles, StoredNibblesSubKey};
-use rocksdb::{ColumnFamilyDescriptor, Options};
+use reth_trie_common::StoredNibbles;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Table storing the trie nodes.

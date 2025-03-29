@@ -1,20 +1,12 @@
 use super::super::dupsort::DupSortHelper;
-use crate::implementation::rocks::cursor::RocksCursor;
-use crate::tables::trie::{
-    AccountTrieTable, StorageTrieTable, TrieNibbles, TrieNodeValue, TrieTable,
-};
+use crate::tables::trie::{AccountTrieTable, StorageTrieTable, TrieNibbles, TrieNodeValue};
 use crate::RocksTransaction;
 use alloy_primitives::{FixedBytes, B256};
 use reth_db::transaction::DbTx;
 use reth_db_api::{cursor::DbCursorRO, DatabaseError};
-use reth_trie::{
-    hashed_cursor::{HashedCursor, HashedCursorFactory},
-    trie_cursor::{TrieCursor, TrieCursorFactory},
-};
+use reth_trie::trie_cursor::{TrieCursor, TrieCursorFactory};
 use reth_trie::{BranchNodeCompact, Nibbles, TrieMask}; // For encoding/decoding
-use reth_trie_common::{StoredNibbles, StoredNibblesSubKey};
-use rocksdb::{ColumnFamily, Direction, IteratorMode, ReadOptions, DB};
-use std::sync::Mutex;
+use reth_trie_common::StoredNibbles;
 
 /// RocksDB implementation of account trie cursor
 pub struct RocksAccountTrieCursor<'tx> {
@@ -79,7 +71,6 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
         key: Nibbles,
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
         // create cursor via txn
-        // let mut cursor: RocksCursor<AccountTrieTable, false> =
         let mut cursor = self.tx.cursor_read::<AccountTrieTable>()?;
 
         let res = cursor.seek_exact(TrieNibbles(key.clone()))?.map(|val| (val.0 .0, val.1));
@@ -98,7 +89,6 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
         key: Nibbles,
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
         // Create cursor from txn
-        // let mut cursor: RocksCursor<AccountTrieTable, false> =
         let mut cursor = self.tx.cursor_read::<AccountTrieTable>()?;
 
         // Use seek with StoredNibbles
@@ -115,7 +105,6 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
 
     fn next(&mut self) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
         // Create cursor from txn
-        // let mut cursor: RocksCursor<AccountTrieTable, false> =
         let mut cursor = self.tx.cursor_read::<AccountTrieTable>()?;
 
         // if have current key ? Position cursor

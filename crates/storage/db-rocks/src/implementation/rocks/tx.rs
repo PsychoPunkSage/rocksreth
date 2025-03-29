@@ -2,18 +2,17 @@ use crate::implementation::rocks::cursor::{RocksCursor, RocksDupCursor};
 use crate::implementation::rocks::trie::RocksTrieCursorFactory;
 use reth_db_api::table::TableImporter;
 use reth_db_api::{
-    cursor::{DbCursorRO, DbCursorRW, DbDupCursorRO, DbDupCursorRW},
+    cursor::{DbCursorRO, DbCursorRW, DbDupCursorRO},
     table::{Compress, Decode, Decompress, DupSort, Encode, Table},
     transaction::{DbTx, DbTxMut},
     DatabaseError,
 };
 use rocksdb::{
-    AsColumnFamilyRef, BoundColumnFamily, ColumnFamily, ColumnFamilyDescriptor, Options,
-    ReadOptions, WriteBatch, WriteOptions, DB,
+    BoundColumnFamily, ColumnFamily, Options, ReadOptions, WriteBatch, WriteOptions, DB,
 };
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::Mutex;
 
 use super::cursor::{ThreadSafeRocksCursor, ThreadSafeRocksDupCursor};
 

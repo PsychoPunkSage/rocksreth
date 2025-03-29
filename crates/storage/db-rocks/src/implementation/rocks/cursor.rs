@@ -6,7 +6,7 @@ use reth_db_api::{
     table::{Compress, Decode, Decompress, DupSort, Encode, Table},
     DatabaseError,
 };
-use rocksdb::{AsColumnFamilyRef, ColumnFamily, Direction, IteratorMode, ReadOptions, DB};
+use rocksdb::{ColumnFamily, Direction, IteratorMode, ReadOptions, DB};
 use std::ops::Bound;
 use std::ops::RangeBounds;
 use std::result::Result::Ok;
@@ -871,6 +871,20 @@ where
     }
 }
 
+unsafe impl<T: Table, const WRITE: bool> Send for ThreadSafeRocksCursor<T, WRITE>
+where
+    T::Key: Send,
+    T::Value: Send,
+{
+}
+
+unsafe impl<T: Table, const WRITE: bool> Sync for ThreadSafeRocksCursor<T, WRITE>
+where
+    T::Key: Sync,
+    T::Value: Sync,
+{
+}
+
 pub struct ThreadSafeRocksDupCursor<T: DupSort, const WRITE: bool> {
     cursor: Mutex<RocksDupCursor<T, WRITE>>,
     // Add a phantom data to ensure proper Send/Sync implementation
@@ -1097,23 +1111,6 @@ where
     }
 }
 
-// Explicitly implement Send for ThreadSafeRocksCursor, allowing it to be transferred between threads
-unsafe impl<T: Table, const WRITE: bool> Send for ThreadSafeRocksCursor<T, WRITE>
-where
-    T::Key: Send,
-    T::Value: Send,
-{
-}
-
-// Explicitly implement Sync for ThreadSafeRocksCursor, allowing it to be accessed from multiple threads
-unsafe impl<T: Table, const WRITE: bool> Sync for ThreadSafeRocksCursor<T, WRITE>
-where
-    T::Key: Sync,
-    T::Value: Sync,
-{
-}
-
-// Explicitly implement Send for ThreadSafeRocksDupCursor, allowing it to be transferred between threads
 unsafe impl<T: DupSort, const WRITE: bool> Send for ThreadSafeRocksDupCursor<T, WRITE>
 where
     T::Key: Send,
@@ -1122,7 +1119,6 @@ where
 {
 }
 
-// Explicitly implement Sync for ThreadSafeRocksDupCursor, allowing it to be accessed from multiple threads
 unsafe impl<T: DupSort, const WRITE: bool> Sync for ThreadSafeRocksDupCursor<T, WRITE>
 where
     T::Key: Sync,

@@ -14,6 +14,7 @@ use reth_trie::{
 use reth_trie::{BranchNodeCompact, Nibbles, TrieMask}; // For encoding/decoding
 use reth_trie_common::{StoredNibbles, StoredNibblesSubKey};
 use rocksdb::{ColumnFamily, Direction, IteratorMode, ReadOptions, DB};
+use std::sync::Mutex;
 
 /// RocksDB implementation of account trie cursor
 pub struct RocksAccountTrieCursor<'tx> {
@@ -78,8 +79,8 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
         key: Nibbles,
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
         // create cursor via txn
-        let mut cursor: RocksCursor<AccountTrieTable, false> =
-            self.tx.cursor_read::<AccountTrieTable>()?;
+        // let mut cursor: RocksCursor<AccountTrieTable, false> =
+        let mut cursor = self.tx.cursor_read::<AccountTrieTable>()?;
 
         let res = cursor.seek_exact(TrieNibbles(key.clone()))?.map(|val| (val.0 .0, val.1));
 
@@ -97,8 +98,8 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
         key: Nibbles,
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
         // Create cursor from txn
-        let mut cursor: RocksCursor<AccountTrieTable, false> =
-            self.tx.cursor_read::<AccountTrieTable>()?;
+        // let mut cursor: RocksCursor<AccountTrieTable, false> =
+        let mut cursor = self.tx.cursor_read::<AccountTrieTable>()?;
 
         // Use seek with StoredNibbles
         let res = cursor.seek(TrieNibbles(key))?.map(|val| (val.0 .0, val.1));
@@ -114,8 +115,8 @@ impl<'tx> TrieCursor for RocksAccountTrieCursor<'tx> {
 
     fn next(&mut self) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
         // Create cursor from txn
-        let mut cursor: RocksCursor<AccountTrieTable, false> =
-            self.tx.cursor_read::<AccountTrieTable>()?;
+        // let mut cursor: RocksCursor<AccountTrieTable, false> =
+        let mut cursor = self.tx.cursor_read::<AccountTrieTable>()?;
 
         // if have current key ? Position cursor
         if let Some(current) = &self.current_key {

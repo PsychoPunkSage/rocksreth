@@ -15,6 +15,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::{Mutex, MutexGuard};
 
+use super::cursor::{ThreadSafeRocksCursor, ThreadSafeRocksDupCursor};
+
 /// Generic transaction type for RocksDB
 pub struct RocksTransaction<const WRITE: bool> {
     /// Reference to DB
@@ -55,7 +57,7 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
     }
 
     /// Get the column family handle for a table
-    fn get_cf<T: Table>(&self) -> Result<Arc<BoundColumnFamily>, DatabaseError> {
+    fn get_cf<T: Table>(&self) -> Result<Arc<BoundColumnFamily<'_>>, DatabaseError> {
         let table_name = T::NAME;
 
         // Try to get the column family
@@ -65,7 +67,7 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
         }
     }
 
-    fn cf_to_arc_column_family<'a>(&self, cf: Arc<BoundColumnFamily<'a>>) -> Arc<ColumnFamily> {
+    fn cf_to_arc_column_family<'a>(&self, cf: Arc<BoundColumnFamily<'_>>) -> Arc<ColumnFamily> {
         // We need to use unsafe here because there's no direct conversion
         // The underlying types are compatible but Rust's type system doesn't know that
         unsafe { std::mem::transmute(cf) }
@@ -93,8 +95,8 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
 
 // Implement read-only transaction
 impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
-    type Cursor<T: Table> = RocksCursor<T, WRITE>;
-    type DupCursor<T: DupSort> = RocksDupCursor<T, WRITE>;
+    type Cursor<T: Table> = ThreadSafeRocksCursor<T, WRITE>;
+    type DupCursor<T: DupSort> = ThreadSafeRocksDupCursor<T, WRITE>;
 
     fn get<T: Table>(&self, key: T::Key) -> Result<Option<T::Value>, DatabaseError>
     where
@@ -142,7 +144,11 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
     where
         T::Key: Encode + Decode + Clone,
     {
-        RocksCursor::new(self.db.clone(), self.cf_to_arc_column_family(self.get_cf::<T>()?))
+        // Create a regular cursor first and handle the Result
+        let inner_cursor =
+            RocksCursor::new(self.db.clone(), self.cf_to_arc_column_family(self.get_cf::<T>()?))?;
+        // Now wrap the successful cursor in the thread-safe wrapper
+        Ok(ThreadSafeRocksCursor::new(inner_cursor))
     }
 
     fn cursor_dup_read<T: DupSort>(&self) -> Result<Self::DupCursor<T>, DatabaseError>
@@ -150,7 +156,13 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
         T::Key: Encode + Decode + Clone + PartialEq,
         T::SubKey: Encode + Decode + Clone,
     {
-        RocksDupCursor::new(self.db.clone(), self.cf_to_arc_column_family(self.get_cf::<T>()?))
+        // Create a regular cursor first and handle the Result
+        let inner_cursor = RocksDupCursor::new(
+            self.db.clone(),
+            self.cf_to_arc_column_family(self.get_cf::<T>()?),
+        )?;
+        // Now wrap the successful cursor in the thread-safe wrapper
+        Ok(ThreadSafeRocksDupCursor::new(inner_cursor))
     }
 
     fn commit(self) -> Result<bool, DatabaseError> {
@@ -201,8 +213,8 @@ impl<const WRITE: bool> DbTx for RocksTransaction<WRITE> {
 
 // Implement write transaction capabilities
 impl DbTxMut for RocksTransaction<true> {
-    type CursorMut<T: Table> = RocksCursor<T, true>;
-    type DupCursorMut<T: DupSort> = RocksDupCursor<T, true>;
+    type CursorMut<T: Table> = ThreadSafeRocksCursor<T, true>;
+    type DupCursorMut<T: DupSort> = ThreadSafeRocksDupCursor<T, true>;
 
     fn put<T: Table>(&self, key: T::Key, value: T::Value) -> Result<(), DatabaseError>
     where
@@ -255,7 +267,11 @@ impl DbTxMut for RocksTransaction<true> {
     where
         T::Key: Encode + Decode + Clone,
     {
-        RocksCursor::new(self.db.clone(), self.cf_to_arc_column_family(self.get_cf::<T>()?))
+        // Create a regular cursor first and handle the Result
+        let inner_cursor =
+            RocksCursor::new(self.db.clone(), self.cf_to_arc_column_family(self.get_cf::<T>()?))?;
+        // Now wrap the successful cursor in the thread-safe wrapper
+        Ok(ThreadSafeRocksCursor::new(inner_cursor))
     }
 
     fn cursor_dup_write<T: DupSort>(&self) -> Result<Self::DupCursorMut<T>, DatabaseError>
@@ -263,7 +279,13 @@ impl DbTxMut for RocksTransaction<true> {
         T::Key: Encode + Decode + Clone + PartialEq,
         T::SubKey: Encode + Decode + Clone,
     {
-        RocksDupCursor::new(self.db.clone(), self.cf_to_arc_column_family(self.get_cf::<T>()?))
+        // Create a regular cursor first and handle the Result
+        let inner_cursor = RocksDupCursor::new(
+            self.db.clone(),
+            self.cf_to_arc_column_family(self.get_cf::<T>()?),
+        )?;
+        // Now wrap the successful cursor in the thread-safe wrapper
+        Ok(ThreadSafeRocksDupCursor::new(inner_cursor))
     }
 }
 
@@ -327,7 +349,8 @@ impl TableImporter for RocksTransaction<true> {
         let mut current = source_cursor.first()?;
 
         while let Some((key, value)) = current {
-            destination_cursor.upsert(key.clone(), &value)?;
+            // Use the DbCursorRW trait method, not a direct method on ThreadSafeRocksDupCursor
+            DbCursorRW::upsert(&mut destination_cursor, key.clone(), &value)?;
 
             // Try to get next value with same key
             let next_with_same_key = source_cursor.next_dup()?;

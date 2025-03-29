@@ -592,8 +592,8 @@ test-fuzz = "6"
 rstest = "0.23.0"
 
 # allocators
-tikv-jemalloc-ctl = "0.6"
-tikv-jemallocator = "0.6"
+tikv-jemalloc-ctl = "0.6.0"
+tikv-jemallocator = "0.6.0"
 tracy-client = "0.17.3"
 snmalloc-rs = { version = "0.3.7", features = ["build_cc"] }
 
@@ -602,7 +602,6 @@ snmalloc-rs = { version = "0.3.7", features = ["build_cc"] }
 #
 # See: https://github.com/eira-fransham/crunchy/issues/13
 crunchy = "=0.2.2"
-
 # [patch.crates-io]
 # alloy-consensus = { git = "https://github.com/alloy-rs/alloy", rev = "cfb13aa" }
 # alloy-contract = { git = "https://github.com/alloy-rs/alloy", rev = "cfb13aa" }

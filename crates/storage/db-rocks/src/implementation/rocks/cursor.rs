@@ -727,11 +727,13 @@ where
 
 pub struct ThreadSafeRocksCursor<T: Table, const WRITE: bool> {
     cursor: Mutex<RocksCursor<T, WRITE>>,
+    // Add a phantom data to ensure proper Send/Sync implementation
+    _marker: std::marker::PhantomData<*const ()>,
 }
 
 impl<T: Table, const WRITE: bool> ThreadSafeRocksCursor<T, WRITE> {
     pub fn new(cursor: RocksCursor<T, WRITE>) -> Self {
-        Self { cursor: Mutex::new(cursor) }
+        Self { cursor: Mutex::new(cursor), _marker: std::marker::PhantomData }
     }
 }
 
@@ -871,11 +873,13 @@ where
 
 pub struct ThreadSafeRocksDupCursor<T: DupSort, const WRITE: bool> {
     cursor: Mutex<RocksDupCursor<T, WRITE>>,
+    // Add a phantom data to ensure proper Send/Sync implementation
+    _marker: std::marker::PhantomData<*const ()>,
 }
 
 impl<T: DupSort, const WRITE: bool> ThreadSafeRocksDupCursor<T, WRITE> {
     pub fn new(cursor: RocksDupCursor<T, WRITE>) -> Self {
-        Self { cursor: Mutex::new(cursor) }
+        Self { cursor: Mutex::new(cursor), _marker: std::marker::PhantomData }
     }
 }
 
@@ -1091,4 +1095,38 @@ where
         let mut cursor_guard = self.cursor.lock().unwrap();
         cursor_guard.delete_current()
     }
+}
+
+// Explicitly implement Send for ThreadSafeRocksCursor, allowing it to be transferred between threads
+unsafe impl<T: Table, const WRITE: bool> Send for ThreadSafeRocksCursor<T, WRITE>
+where
+    T::Key: Send,
+    T::Value: Send,
+{
+}
+
+// Explicitly implement Sync for ThreadSafeRocksCursor, allowing it to be accessed from multiple threads
+unsafe impl<T: Table, const WRITE: bool> Sync for ThreadSafeRocksCursor<T, WRITE>
+where
+    T::Key: Sync,
+    T::Value: Sync,
+{
+}
+
+// Explicitly implement Send for ThreadSafeRocksDupCursor, allowing it to be transferred between threads
+unsafe impl<T: DupSort, const WRITE: bool> Send for ThreadSafeRocksDupCursor<T, WRITE>
+where
+    T::Key: Send,
+    T::Value: Send,
+    T::SubKey: Send,
+{
+}
+
+// Explicitly implement Sync for ThreadSafeRocksDupCursor, allowing it to be accessed from multiple threads
+unsafe impl<T: DupSort, const WRITE: bool> Sync for ThreadSafeRocksDupCursor<T, WRITE>
+where
+    T::Key: Sync,
+    T::Value: Sync,
+    T::SubKey: Sync,
+{
 }

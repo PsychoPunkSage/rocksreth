@@ -5,7 +5,7 @@ use reth_db_api::{
     transaction::{DbTx, DbTxMut},
     DatabaseError,
 };
-use rocksdb::{ColumnFamilyDescriptor, Options, ReadOptions, WriteOptions, DB};
+use rocksdb::{BlockBasedOptions, ColumnFamilyDescriptor, Options, ReadOptions, WriteOptions, DB};
 use std::{path::Path, sync::Arc};
 
 pub mod cursor;
@@ -87,7 +87,9 @@ impl RocksDB {
 
         // Setup block cache
         let cache = rocksdb::Cache::new_lru_cache(config.block_cache_size);
-        opts.set_blob_cache(&cache);
+        let mut table_options = BlockBasedOptions::default();
+        table_options.set_block_cache(&cache);
+        opts.set_block_based_table_factory(&table_options);
 
         // Get column family descriptors
         let cf_descriptors = if path.exists() {

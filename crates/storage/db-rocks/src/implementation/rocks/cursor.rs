@@ -1,3 +1,5 @@
+use super::dupsort::DupSortHelper;
+use crate::implementation::rocks::tx::CFPtr;
 use reth_db_api::{
     cursor::{
         DbCursorRO, DbCursorRW, DbDupCursorRO, DbDupCursorRW, DupWalker, RangeWalker,
@@ -12,12 +14,10 @@ use std::ops::RangeBounds;
 use std::result::Result::Ok;
 use std::sync::{Arc, Mutex};
 
-use super::dupsort::DupSortHelper;
-
 /// RocksDB cursor implementation
 pub struct RocksCursor<T: Table, const WRITE: bool> {
     db: Arc<DB>,
-    cf: Arc<ColumnFamily>,
+    cf: CFPtr,
     // Store the current key-value pair
     current_item: Option<(Box<[u8]>, Box<[u8]>)>,
     _marker: std::marker::PhantomData<T>,
@@ -27,7 +27,8 @@ impl<T: Table, const WRITE: bool> RocksCursor<T, WRITE>
 where
     T::Key: Encode + Decode + Clone,
 {
-    pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
+    // pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
+    pub(crate) fn new(db: Arc<DB>, cf: CFPtr) -> Result<Self, DatabaseError> {
         let mut cursor = Self { db, cf, current_item: None, _marker: std::marker::PhantomData };
 
         // Position at the first item
@@ -43,14 +44,10 @@ where
     {
         // Clone the Arc references to avoid borrowing issues
         let db_clone = self.db.clone();
-        let cf_clone = self.cf.clone();
+        let cf = unsafe { &*self.cf };
 
         // Create a new iterator
-        let mut iter = db_clone.iterator_cf_opt(
-            cf_clone.as_ref(),
-            ReadOptions::default(),
-            IteratorMode::Start,
-        );
+        let mut iter = db_clone.iterator_cf_opt(cf, ReadOptions::default(), IteratorMode::Start);
 
         // Get the first item
         let next_item = iter.next();
@@ -86,11 +83,10 @@ where
     {
         // Clone the Arc references to avoid borrowing issues
         let db_clone = self.db.clone();
-        let cf_clone = self.cf.clone();
-
+        let cf = unsafe { &*self.cf };
         // Create a new iterator
         let mut iter = db_clone.iterator_cf_opt(
-            cf_clone.as_ref(),
+            cf,
             ReadOptions::default(),
             IteratorMode::From(key_bytes, direction),
         );
@@ -125,11 +121,10 @@ where
     {
         // Clone the Arc references to avoid borrowing issues
         let db_clone = self.db.clone();
-        let cf_clone = self.cf.clone();
+        let cf = unsafe { &*self.cf };
 
         // Create a new iterator
-        let mut iter =
-            db_clone.iterator_cf_opt(cf_clone.as_ref(), ReadOptions::default(), IteratorMode::End);
+        let mut iter = db_clone.iterator_cf_opt(cf, ReadOptions::default(), IteratorMode::End);
 
         // Get the next item
         let next_item = iter.next();
@@ -162,12 +157,12 @@ where
         if let Some((current_key, _)) = &self.current_item {
             // Clone the Arc references and the current key to avoid borrowing issues
             let db_clone = self.db.clone();
-            let cf_clone = self.cf.clone();
+            let cf = unsafe { &*self.cf };
             let key_clone = current_key.clone();
 
             // Create a new iterator positioned at the current key
             let mut iter = db_clone.iterator_cf_opt(
-                cf_clone.as_ref(),
+                cf,
                 ReadOptions::default(),
                 IteratorMode::From(&key_clone, Direction::Forward),
             );
@@ -211,12 +206,12 @@ where
         if let Some((current_key, _)) = &self.current_item {
             // Clone the Arc references and the current key to avoid borrowing issues
             let db_clone = self.db.clone();
-            let cf_clone = self.cf.clone();
+            let cf = unsafe { &*self.cf };
             let key_clone = current_key.clone();
 
             // Create a new iterator positioned at the current key in reverse direction
             let mut iter = db_clone.iterator_cf_opt(
-                cf_clone.as_ref(),
+                cf,
                 ReadOptions::default(),
                 IteratorMode::From(&key_clone, Direction::Reverse),
             );
@@ -395,10 +390,9 @@ where
 
         // Clone before using to avoid borrowing self
         let db = self.db.clone();
-        let cf = self.cf.clone();
+        let cf = unsafe { &*self.cf };
 
-        db.put_cf(cf.as_ref(), key_bytes, value_bytes)
-            .map_err(|e| DatabaseError::Other(e.to_string()))
+        db.put_cf(cf, key_bytes, value_bytes).map_err(|e| DatabaseError::Other(e.to_string()))
     }
 
     fn insert(&mut self, key: T::Key, value: &T::Value) -> Result<(), DatabaseError> {
@@ -416,14 +410,13 @@ where
         if let Some((key, _)) = self.current()? {
             // Clone before using to avoid borrowing self
             let db = self.db.clone();
-            let cf = self.cf.clone();
+            let cf = unsafe { &*self.cf };
 
             // Clone key before encoding
             let key_clone = key.clone();
             let key_bytes = key_clone.encode();
 
-            db.delete_cf(cf.as_ref(), key_bytes)
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            db.delete_cf(cf, key_bytes).map_err(|e| DatabaseError::Other(e.to_string()))?;
 
             // Move to next item
             let _ = self.next()?;
@@ -443,7 +436,7 @@ where
     T::Key: Encode + Decode + Clone,
     T::SubKey: Encode + Decode + Clone,
 {
-    pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
+    pub(crate) fn new(db: Arc<DB>, cf: CFPtr) -> Result<Self, DatabaseError> {
         Ok(Self { inner: RocksCursor::new(db, cf)?, current_key: None })
     }
 }

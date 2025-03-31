@@ -38,7 +38,10 @@ pub(crate) struct TableManagement;
 
 impl TableManagement {
     /// Create all column families for given database
-    pub fn create_column_families(db: &rocksdb::DB, tables: &[&str]) -> Result<(), DatabaseError> {
+    pub fn create_column_families(
+        db: &mut rocksdb::DB,
+        tables: &[&str],
+    ) -> Result<(), DatabaseError> {
         for table in tables {
             if !db.cf_handle(table).is_some() {
                 db.create_cf(table, &Options::default()).map_err(|e| {

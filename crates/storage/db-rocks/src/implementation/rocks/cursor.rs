@@ -8,7 +8,7 @@ use reth_db_api::{
     table::{Compress, Decode, Decompress, DupSort, Encode, Table},
     DatabaseError,
 };
-use rocksdb::{ColumnFamily, Direction, IteratorMode, ReadOptions, DB};
+use rocksdb::{Direction, IteratorMode, ReadOptions, DB};
 use std::ops::Bound;
 use std::ops::RangeBounds;
 use std::result::Result::Ok;

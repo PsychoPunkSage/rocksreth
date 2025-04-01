@@ -24,7 +24,7 @@ alloy-primitives = { workspace = true }
 reth-execution-errors = { workspace = true }
 
 # rocksdb
-rocksdb = { version = "0.22.0", default-features = true }
+rocksdb = { version = "0.22.0" }
 serde = { version = "1.0.218", features = ["derive"] }
 
 # database interfaces

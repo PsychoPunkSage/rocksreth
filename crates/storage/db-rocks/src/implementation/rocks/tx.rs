@@ -42,7 +42,7 @@ impl<const WRITE: bool> std::fmt::Debug for RocksTransaction<WRITE> {
 
 impl<const WRITE: bool> RocksTransaction<WRITE> {
     /// Create new transaction
-    pub(crate) fn new(db: Arc<DB>, _write: bool) -> Self {
+    pub fn new(db: Arc<DB>, _write: bool) -> Self {
         let batch = if WRITE { Some(Mutex::new(WriteBatch::default())) } else { None };
 
         Self {

@@ -66,7 +66,7 @@ mod test;
 mod version;
 
 pub use errors::RocksDBError;
-use implementation::rocks::RocksDB;
+pub use implementation::rocks::RocksDB;
 use metrics::DatabaseMetrics;
 use std::{path::Path, sync::Arc};
 

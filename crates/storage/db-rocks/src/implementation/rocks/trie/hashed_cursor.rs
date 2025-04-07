@@ -11,6 +11,7 @@ use reth_trie::hashed_cursor::HashedStorageCursor;
 use std::marker::PhantomData;
 
 /// RocksDB implementation of HashedCursorFactory
+#[derive(Clone)]
 pub struct RocksHashedCursorFactory<'tx> {
     tx: &'tx RocksTransaction<false>,
 }

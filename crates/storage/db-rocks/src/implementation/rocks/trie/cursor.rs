@@ -214,6 +214,7 @@ impl<'tx> TrieCursor for RocksStorageTrieCursor<'tx> {
 }
 
 /// Factory for creating trie cursors
+#[derive(Clone)]
 pub struct RocksTrieCursorFactory<'tx> {
     /// Transaction reference - provides context for all created cursors
     tx: &'tx RocksTransaction<false>,

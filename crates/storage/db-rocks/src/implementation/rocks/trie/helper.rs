@@ -2,8 +2,10 @@ use crate::implementation::rocks::tx::RocksTransaction;
 use alloy_primitives::B256;
 use reth_execution_errors::StateRootError;
 use reth_trie::hashed_cursor::HashedPostStateCursorFactory;
+use reth_trie::prefix_set::TriePrefixSets;
 use reth_trie::HashedPostState;
-use reth_trie::StateRoot;
+use reth_trie::HashedPostStateSorted;
+use reth_trie::StateRoot; // Import the missing type
 
 /// Helper function to calculate state root directly from post state
 pub fn calculate_state_root(
@@ -13,6 +15,20 @@ pub fn calculate_state_root(
     let prefix_sets = post_state.construct_prefix_sets().freeze();
     let state_sorted = post_state.into_sorted();
 
+    let calculator = StateRoot::new(
+        tx.trie_cursor_factory(),
+        HashedPostStateCursorFactory::new(tx.hashed_cursor_factory(), &state_sorted),
+    )
+    .with_prefix_sets(prefix_sets);
+
+    calculator.root()
+}
+
+pub fn calculate_state_root_components(
+    tx: &RocksTransaction<false>,
+    prefix_sets: TriePrefixSets,
+    state_sorted: HashedPostStateSorted,
+) -> Result<B256, StateRootError> {
     let calculator = StateRoot::new(
         tx.trie_cursor_factory(),
         HashedPostStateCursorFactory::new(tx.hashed_cursor_factory(), &state_sorted),

@@ -66,11 +66,11 @@ mod test;
 mod version;
 
 pub use errors::RocksDBError;
-pub use implementation::rocks::RocksDB;
 use metrics::DatabaseMetrics;
 use std::{path::Path, sync::Arc};
 
-// Re-export important types
+pub use implementation::rocks::trie::calculate_state_root;
+pub use implementation::rocks::RocksDB;
 pub use implementation::rocks::{tx::RocksTransaction, RocksDBConfig};
 
 /// Database environment for RocksDB

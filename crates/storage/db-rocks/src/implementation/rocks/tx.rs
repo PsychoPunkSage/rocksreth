@@ -1,4 +1,5 @@
 use super::cursor::{ThreadSafeRocksCursor, ThreadSafeRocksDupCursor};
+use super::trie::RocksHashedCursorFactory;
 use crate::implementation::rocks::cursor::{RocksCursor, RocksDupCursor};
 use crate::implementation::rocks::trie::RocksTrieCursorFactory;
 use reth_db_api::table::TableImporter;
@@ -87,6 +88,22 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
         });
 
         RocksTrieCursorFactory::new(Box::leak(tx))
+    }
+
+    pub fn hashed_cursor_factory(&self) -> RocksHashedCursorFactory<'_>
+    where
+        Self: Sized,
+    {
+        assert!(!WRITE, "hashed_cursor_factory only works with read-only txn");
+        // We need to create a read-only version to match the expected type
+        let tx = Box::new(RocksTransaction::<false> {
+            db: self.db.clone(),
+            batch: None,
+            read_opts: ReadOptions::default(),
+            write_opts: WriteOptions::default(),
+            _marker: PhantomData,
+        });
+        RocksHashedCursorFactory::new(Box::leak(tx))
     }
 }
 

@@ -1,10 +1,11 @@
 mod cursor;
 mod hashed_cursor;
+mod helper;
 mod storage;
-mod witness;
 
 pub use cursor::*;
 pub use hashed_cursor::*;
+pub use helper::*;
 pub use storage::*;
 
 use alloy_primitives::B256;

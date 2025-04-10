@@ -69,7 +69,7 @@ pub use errors::RocksDBError;
 use metrics::DatabaseMetrics;
 use std::{path::Path, sync::Arc};
 
-pub use implementation::rocks::trie::{calculate_state_root, calculate_state_root_components};
+pub use implementation::rocks::trie::{calculate_state_root, calculate_state_root_with_updates};
 pub use implementation::rocks::RocksDB;
 pub use implementation::rocks::{tx::RocksTransaction, RocksDBConfig};
 pub use reth_primitives_traits::Account;

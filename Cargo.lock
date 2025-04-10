@@ -7013,6 +7013,7 @@ dependencies = [
  "reth-db-api",
  "reth-execution-errors",
  "reth-primitives",
+ "reth-primitives-traits",
  "reth-storage-api",
  "reth-trie",
  "reth-trie-common",

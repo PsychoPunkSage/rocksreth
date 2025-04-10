@@ -71,6 +71,10 @@ impl<const WRITE: bool> RocksTransaction<WRITE> {
         }
     }
 
+    pub fn get_db_clone(&self) -> Arc<DB> {
+        self.db.clone()
+    }
+
     /// Create a trie cursor factory for this transaction
     #[allow(dead_code)]
     pub fn trie_cursor_factory(&self) -> RocksTrieCursorFactory<'_>

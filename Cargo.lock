@@ -7001,6 +7001,7 @@ name = "reth-db-rocks"
 version = "1.1.5"
 dependencies = [
  "alloy-primitives",
+ "alloy-rlp",
  "assert_matches",
  "bytes",
  "codspeed-criterion-compat",

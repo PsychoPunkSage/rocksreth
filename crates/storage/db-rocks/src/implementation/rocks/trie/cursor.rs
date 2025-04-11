@@ -1,12 +1,10 @@
-use super::super::dupsort::DupSortHelper;
 use crate::tables::trie::{AccountTrieTable, StorageTrieTable, TrieNibbles, TrieNodeValue};
 use crate::RocksTransaction;
-use alloy_primitives::{FixedBytes, B256};
+use alloy_primitives::B256;
 use reth_db::transaction::DbTx;
 use reth_db_api::{cursor::DbCursorRO, DatabaseError};
 use reth_trie::trie_cursor::{TrieCursor, TrieCursorFactory};
 use reth_trie::{BranchNodeCompact, Nibbles, TrieMask}; // For encoding/decoding
-use reth_trie_common::StoredNibbles;
 
 /// RocksDB implementation of account trie cursor
 pub struct RocksAccountTrieCursor<'tx> {
@@ -17,10 +15,7 @@ pub struct RocksAccountTrieCursor<'tx> {
 }
 /// RocksDB implementation of storage trie cursor
 pub struct RocksStorageTrieCursor<'tx> {
-    /// Transaction reference
-    // *** [Temporary SOln] Need to see How DbCursorRO in rest of the REPO
-    // *** cursor: RocksDupCursor<StorageTrieTable, false>,  // Or whatever the concrete type is
-    cursor: Box<dyn DbCursorRO<StorageTrieTable> + Send + Sync + 'tx>, // *** [Temporary SOln] Need to see How DbCursorRO in rest of the REPO
+    tx: &'tx RocksTransaction<false>,
     /// Account hash for storage trie
     hashed_address: B256,
     /// Current cursor position
@@ -35,10 +30,11 @@ impl<'tx> RocksAccountTrieCursor<'tx> {
 
 impl<'tx> RocksStorageTrieCursor<'tx> {
     pub fn new(
-        cursor: Box<dyn DbCursorRO<StorageTrieTable> + Send + Sync + 'tx>,
+        // cursor: Box<dyn DbCursorRO<StorageTrieTable> + Send + Sync + 'tx>,
+        tx: &'tx RocksTransaction<false>,
         hashed_address: B256,
     ) -> Self {
-        Self { cursor, hashed_address, current_key: None }
+        Self { tx, hashed_address, current_key: None }
     }
 
     // Helper method to convert TrieNodeValue to BranchNodeCompact :::> BETTER TO HAVE IT REMOVED
@@ -143,23 +139,32 @@ impl<'tx> TrieCursor for RocksStorageTrieCursor<'tx> {
         &mut self,
         key: Nibbles,
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
-        // Create subkey from nibbles
-        let subkey = StoredNibbles(key.clone());
+        let mut cursor = self.tx.cursor_read::<StorageTrieTable>()?;
 
-        // Create composite key using DupSortHelper
-        let composite_key_vec =
-            DupSortHelper::create_composite_key::<StorageTrieTable>(&self.hashed_address, &subkey)?;
+        if let Some((addr, value)) = cursor.seek_exact(self.hashed_address)? {
+            // Get first entry
+            if addr == self.hashed_address {
+                // Check if this entry has the right nibbles
+                if value.nibbles.0 == key {
+                    self.current_key = Some(key.clone());
+                    return Ok(Some((key, Self::value_to_branch_node(value)?)));
+                }
 
-        let composite_key =
-            FixedBytes::<32>::try_from(composite_key_vec.as_slice()).map_err(|_| {
-                DatabaseError::Other(format!("Failed to convert Vec<u8> to FixedBytes<32>"))
-            })?;
+                // Scan for next entries with same account hash
+                let mut next_entry = cursor.next()?;
+                while let Some((next_addr, next_value)) = next_entry {
+                    if next_addr != self.hashed_address {
+                        break;
+                    }
 
-        // Use seek_exact with the composite key
-        if let Some((_, value)) = self.cursor.seek_exact(composite_key)? {
-            let nibbles = value.nibbles.0.clone();
-            self.current_key = Some(nibbles.clone());
-            return Ok(Some((nibbles, Self::value_to_branch_node(value)?)));
+                    if next_value.nibbles.0 == key {
+                        self.current_key = Some(key.clone());
+                        return Ok(Some((key, Self::value_to_branch_node(next_value)?)));
+                    }
+
+                    next_entry = cursor.next()?;
+                }
+            }
         }
 
         self.current_key = None;
@@ -170,20 +175,32 @@ impl<'tx> TrieCursor for RocksStorageTrieCursor<'tx> {
         &mut self,
         key: Nibbles,
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
-        // Create prefix for scanning all entries with this account hash
-        let prefix_vec = DupSortHelper::create_prefix::<StorageTrieTable>(&self.hashed_address)?;
+        let mut cursor = self.tx.cursor_read::<StorageTrieTable>()?;
 
-        let prefix = FixedBytes::<32>::try_from(prefix_vec.as_slice()).map_err(|_| {
-            DatabaseError::Other(format!("Failed to convert Vec<u8> to FixedBytes<32>"))
-        })?;
+        if let Some((addr, value)) = cursor.seek_exact(self.hashed_address)? {
+            // Check first entry
+            if addr == self.hashed_address {
+                if value.nibbles.0 >= key {
+                    let found_nibbles = value.nibbles.0.clone();
+                    self.current_key = Some(found_nibbles.clone());
+                    return Ok(Some((found_nibbles, Self::value_to_branch_node(value)?)));
+                }
 
-        // Seek to the first entry with this prefix
-        if let Some((_, value)) = self.cursor.seek(prefix)? {
-            // Check if the found key has a prefix matching our search key
-            let found_key = &value.nibbles.0;
-            if found_key.has_prefix(&key) {
-                self.current_key = Some(found_key.clone());
-                return Ok(Some((found_key.clone(), Self::value_to_branch_node(value)?)));
+                // Scan for next entries with same account hash
+                let mut next_entry = cursor.next()?;
+                while let Some((next_addr, next_value)) = next_entry {
+                    if next_addr != self.hashed_address {
+                        break;
+                    }
+
+                    if next_value.nibbles.0 >= key {
+                        let found_nibbles = next_value.nibbles.0.clone();
+                        self.current_key = Some(found_nibbles.clone());
+                        return Ok(Some((found_nibbles, Self::value_to_branch_node(next_value)?)));
+                    }
+
+                    next_entry = cursor.next()?;
+                }
             }
         }
 
@@ -192,15 +209,62 @@ impl<'tx> TrieCursor for RocksStorageTrieCursor<'tx> {
     }
 
     fn next(&mut self) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
-        // Create prefix for scanning all entries with this account hash
-        let prefix = DupSortHelper::create_prefix::<StorageTrieTable>(&self.hashed_address)?;
+        if let Some(current_key) = &self.current_key {
+            let mut cursor = self.tx.cursor_read::<StorageTrieTable>()?;
 
-        // Move to the next entry
-        if let Some((composite_key, value)) = self.cursor.next()? {
-            // Check if the key still has our prefix
-            if composite_key.starts_with(&prefix) {
-                self.current_key = Some(value.nibbles.0.clone());
-                return Ok(Some((value.clone().nibbles.0, Self::value_to_branch_node(value)?)));
+            // Find current position
+            if let Some((addr, value)) = cursor.seek_exact(self.hashed_address)? {
+                if addr == self.hashed_address {
+                    // Check if this is our current entry
+                    if value.nibbles.0 == *current_key {
+                        // Move to next entry
+                        if let Some((next_addr, next_value)) = cursor.next()? {
+                            if next_addr == self.hashed_address {
+                                let next_nibbles = next_value.nibbles.0.clone();
+                                self.current_key = Some(next_nibbles.clone());
+                                return Ok(Some((
+                                    next_nibbles,
+                                    Self::value_to_branch_node(next_value)?,
+                                )));
+                            }
+                        }
+                    } else {
+                        // Scan for our current position
+                        let mut next_entry = cursor.next()?;
+                        while let Some((next_addr, next_value)) = next_entry {
+                            if next_addr != self.hashed_address {
+                                break;
+                            }
+
+                            if next_value.nibbles.0 == *current_key {
+                                // Found our current position, now get the next one
+                                if let Some((next_next_addr, next_next_value)) = cursor.next()? {
+                                    if next_next_addr == self.hashed_address {
+                                        let next_nibbles = next_next_value.nibbles.0.clone();
+                                        self.current_key = Some(next_nibbles.clone());
+                                        return Ok(Some((
+                                            next_nibbles,
+                                            Self::value_to_branch_node(next_next_value)?,
+                                        )));
+                                    }
+                                }
+                                break;
+                            }
+
+                            next_entry = cursor.next()?;
+                        }
+                    }
+                }
+            }
+        } else {
+            // No current position, return first entry
+            let mut cursor = self.tx.cursor_read::<StorageTrieTable>()?;
+            if let Some((addr, value)) = cursor.seek_exact(self.hashed_address)? {
+                if addr == self.hashed_address {
+                    let nibbles = value.nibbles.0.clone();
+                    self.current_key = Some(nibbles.clone());
+                    return Ok(Some((nibbles, Self::value_to_branch_node(value)?)));
+                }
             }
         }
 
@@ -239,11 +303,6 @@ impl<'tx> TrieCursorFactory for RocksTrieCursorFactory<'tx> {
         &self,
         hashed_address: B256,
     ) -> Result<Self::StorageTrieCursor, DatabaseError> {
-        // Convert hashed_address to bytes to use as prefix
-        let cursor = self.tx.cursor_read::<StorageTrieTable>()?;
-        let boxed_cursor: Box<dyn DbCursorRO<StorageTrieTable> + Send + Sync> = Box::new(cursor);
-
-        // Create cursor with the address prefix
-        Ok(RocksStorageTrieCursor::new(boxed_cursor, hashed_address))
+        Ok(RocksStorageTrieCursor::new(self.tx, hashed_address))
     }
 }

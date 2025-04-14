@@ -400,19 +400,35 @@ fn test_calculate_state_root_with_updates() {
             bytecode_hash: Some(B256::from([3; 32])),
         };
 
+        // Use addresses with different first nibbles to ensure branch nodes
+        let address1 = Address::from([1; 20]);
+        let address2 = Address::from([128; 20]); // Start with a different nibble
+
+        let hashed_address1 = keccak256(address1);
+        let hashed_address2 = keccak256(address2);
+
+        println!("Address1: {:?}", address1);
+        println!("Address2: {:?}", address2);
+        println!("Hashed Address1: {:?}", hashed_address1);
+        println!("Hashed Address2: {:?}", hashed_address2);
+
         // Create a post state with multiple accounts
         let mut post_state = HashedPostState::default();
-        post_state.accounts.insert(hashed_address, Some(account1.clone()));
-        post_state.accounts.insert(keccak256(Address::from([2; 20])), Some(account2.clone()));
+        post_state.accounts.insert(hashed_address1, Some(account1.clone()));
+        post_state.accounts.insert(hashed_address2, Some(account2.clone()));
 
         // Add some storage items to both accounts
         let mut storage1 = reth_trie::HashedStorage::default();
-        storage1.storage.insert(storage_key, U256::from(42));
-        post_state.storages.insert(hashed_address, storage1);
+        storage1.storage.insert(B256::from([3; 32]), U256::from(42));
+        post_state.storages.insert(hashed_address1, storage1);
 
         let mut storage2 = reth_trie::HashedStorage::default();
         storage2.storage.insert(B256::from([4; 32]), U256::from(99));
-        post_state.storages.insert(keccak256(Address::from([2; 20])), storage2);
+        post_state.storages.insert(hashed_address2, storage2);
+
+        // Explicitly print the prefix sets to debug
+        let prefix_sets = post_state.construct_prefix_sets();
+        println!("Prefix Sets: {:?}", prefix_sets);
 
         // Create transactions for reading and writing
         let read_tx = RocksTransaction::<false>::new(db.clone(), false);
@@ -420,6 +436,16 @@ fn test_calculate_state_root_with_updates() {
 
         // Calculate state root and store nodes
         initial_root = calculate_state_root_with_updates(&read_tx, &write_tx, post_state).unwrap();
+
+        // Manually insert a test node to verify DB writes are working
+        let test_nibbles = Nibbles::from_nibbles_unchecked(vec![0, 1, 2, 3]);
+        let mut test_branch = BranchNodeCompact::default();
+        test_branch.state_mask = TrieMask::new(0b1);
+
+        println!("Manually inserting a test node");
+        write_tx
+            .put::<AccountTrieTable>(TrieNibbles(test_nibbles), test_branch.clone())
+            .expect("Failed to insert test node");
 
         // Commit changes
         write_tx.commit().unwrap();

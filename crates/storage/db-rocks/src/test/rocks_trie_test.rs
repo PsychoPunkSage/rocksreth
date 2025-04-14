@@ -371,126 +371,283 @@ fn test_update_existing_key() {
 }
 
 #[test]
-fn test_calculate_state_root_with_updates1() {
+fn test_calculate_state_root_with_updates() {
     let (db, _temp_dir) = create_test_db();
 
     // Create an account and some storage data for testing
     let address = Address::from([1; 20]);
-    let account =
-        Account { nonce: 1, balance: U256::from(1000), bytecode_hash: Some(B256::from([2; 32])) };
-
-    // Create a post state with the account
-    let mut post_state = HashedPostState::default();
     let hashed_address = keccak256(address);
-    post_state.accounts.insert(hashed_address, Some(account.clone()));
-
-    // Add some storage items
-    let mut storage = reth_trie::HashedStorage::default();
     let storage_key = B256::from([3; 32]);
-    let storage_value = U256::from(42);
-    storage.storage.insert(storage_key, storage_value);
-    post_state.storages.insert(hashed_address, storage);
 
-    // Create transactions for reading and writing
-    let read_tx = RocksTransaction::<false>::new(db.clone(), false);
-    let write_tx = RocksTransaction::<true>::new(db.clone(), true);
+    // Shared state across sub-tests
+    let mut initial_root = B256::default();
+    let mut initial_entries = 0;
+    let mut updated_root = B256::default();
 
-    // Calculate state root and store nodes
-    let root = calculate_state_root_with_updates(&read_tx, &write_tx, post_state).unwrap();
+    // Sub-test 1: Initial state creation
+    {
+        println!("Running sub-test: Initial state creation");
 
-    // Commit changes
-    write_tx.commit().unwrap();
-    println!("16");
+        let account1 = Account {
+            nonce: 1,
+            balance: U256::from(1000),
+            bytecode_hash: Some(B256::from([2; 32])),
+        };
 
-    // Verify that nodes were stored by checking if we can retrieve them
-    let verify_tx = RocksTransaction::<false>::new(db.clone(), false);
-    println!("17");
+        let account2 = Account {
+            nonce: 5,
+            balance: U256::from(500),
+            bytecode_hash: Some(B256::from([3; 32])),
+        };
 
-    // Check if we can read from AccountTrieTable
-    // We need to list entries to find the keys that were stored
-    let mut cursor = verify_tx.cursor_read::<AccountTrieTable>().unwrap();
-    let mut entries = 0;
-    let mut first_entry = cursor.first().unwrap();
-    println!("18");
+        // Create a post state with multiple accounts
+        let mut post_state = HashedPostState::default();
+        post_state.accounts.insert(hashed_address, Some(account1.clone()));
+        post_state.accounts.insert(keccak256(Address::from([2; 20])), Some(account2.clone()));
 
-    assert!(first_entry.is_some(), "No entries found in AccountTrieTable");
-    println!("19");
+        // Add some storage items to both accounts
+        let mut storage1 = reth_trie::HashedStorage::default();
+        storage1.storage.insert(storage_key, U256::from(42));
+        post_state.storages.insert(hashed_address, storage1);
 
-    // Count entries and verify that we have something stored
-    while first_entry.is_some() {
-        entries += 1;
-        first_entry = cursor.next().unwrap();
+        let mut storage2 = reth_trie::HashedStorage::default();
+        storage2.storage.insert(B256::from([4; 32]), U256::from(99));
+        post_state.storages.insert(keccak256(Address::from([2; 20])), storage2);
+
+        // Create transactions for reading and writing
+        let read_tx = RocksTransaction::<false>::new(db.clone(), false);
+        let write_tx = RocksTransaction::<true>::new(db.clone(), true);
+
+        // Calculate state root and store nodes
+        initial_root = calculate_state_root_with_updates(&read_tx, &write_tx, post_state).unwrap();
+
+        // Commit changes
+        write_tx.commit().unwrap();
     }
-    println!("20");
 
-    assert!(entries > 0, "No trie nodes were stored in AccountTrieTable");
-    println!("21");
+    // Sub-test 2: Verify initial node storage
+    {
+        println!("Running sub-test: Verify initial node storage");
 
-    // Now let's modify the state and verify that nodes get updated correctly
-    let mut updated_post_state = HashedPostState::default();
-    let updated_account = Account {
-        nonce: 2,                  // Increased nonce
-        balance: U256::from(2000), // Increased balance
-        bytecode_hash: Some(B256::from([2; 32])),
-    };
-    println!("22");
+        // Verify that nodes were stored by checking if we can retrieve them
+        let verify_tx = RocksTransaction::<false>::new(db.clone(), false);
 
-    updated_post_state.accounts.insert(hashed_address, Some(updated_account));
-    println!("23");
+        // Check if we can read from AccountTrieTable
+        let mut cursor = verify_tx.cursor_read::<AccountTrieTable>().unwrap();
+        let mut first_entry = cursor.first().unwrap();
 
-    // Add modified storage
-    let mut updated_storage = reth_trie::HashedStorage::default();
-    updated_storage.storage.insert(storage_key, U256::from(84)); // Changed value
-    updated_post_state.storages.insert(hashed_address, updated_storage);
-    println!("24");
+        assert!(first_entry.is_some(), "No entries found in AccountTrieTable");
 
-    // Create new transactions
-    let read_tx2 = RocksTransaction::<false>::new(db.clone(), false);
-    let write_tx2 = RocksTransaction::<true>::new(db.clone(), true);
-    println!("25");
+        // Count entries and verify that we have something stored
+        while first_entry.is_some() {
+            initial_entries += 1;
+            first_entry = cursor.next().unwrap();
+        }
 
-    // Calculate new state root and store updated nodes
-    let updated_root =
-        calculate_state_root_with_updates(&read_tx2, &write_tx2, updated_post_state.clone())
-            .unwrap();
-    println!("26");
-
-    // Commit changes
-    write_tx2.commit().unwrap();
-    println!("27");
-
-    // Verify that the root has changed
-    assert_ne!(root, updated_root, "State root should change after update");
-    println!("28");
-
-    // Verify that we can still read entries
-    let verify_tx2 = RocksTransaction::<false>::new(db.clone(), false);
-    let mut cursor2 = verify_tx2.cursor_read::<AccountTrieTable>().unwrap();
-    let mut updated_entries = 0;
-    let mut first_entry2 = cursor2.first().unwrap();
-    println!("29");
-
-    while first_entry2.is_some() {
-        updated_entries += 1;
-        first_entry2 = cursor2.next().unwrap();
+        assert!(initial_entries > 0, "No trie nodes were stored in AccountTrieTable");
     }
-    println!("30");
 
-    // The number of entries should be at least as many as before
-    assert!(updated_entries >= entries, "Node count should not decrease after update");
-    println!("31");
+    // Sub-test 3: State updates
+    {
+        println!("Running sub-test: State updates");
 
-    // Finally, verify that we can recompute the same root
-    let read_tx3 = RocksTransaction::<false>::new(db.clone(), false);
-    let recomputed_root = calculate_state_root(&read_tx3, updated_post_state).unwrap();
-    println!("32");
+        // Now let's modify the state and verify that nodes get updated correctly
+        let mut updated_post_state = HashedPostState::default();
+        let updated_account = Account {
+            nonce: 2,                  // Increased nonce
+            balance: U256::from(2000), // Increased balance
+            bytecode_hash: Some(B256::from([2; 32])),
+        };
 
-    assert_eq!(
-        updated_root, recomputed_root,
-        "Recomputed root should match the previously calculated root"
-    );
-    println!("33");
+        updated_post_state.accounts.insert(hashed_address, Some(updated_account));
+
+        // Add modified storage
+        let mut updated_storage = reth_trie::HashedStorage::default();
+        updated_storage.storage.insert(storage_key, U256::from(84)); // Changed value
+        updated_post_state.storages.insert(hashed_address, updated_storage);
+
+        // Create new transactions
+        let read_tx2 = RocksTransaction::<false>::new(db.clone(), false);
+        let write_tx2 = RocksTransaction::<true>::new(db.clone(), true);
+
+        // Calculate new state root and store updated nodes
+        updated_root =
+            calculate_state_root_with_updates(&read_tx2, &write_tx2, updated_post_state.clone())
+                .unwrap();
+
+        // Commit changes
+        write_tx2.commit().unwrap();
+
+        // Verify that the root has changed
+        assert_ne!(initial_root, updated_root, "State root should change after update");
+    }
+
+    // Sub-test 4: Verify updated node storage
+    {
+        println!("Running sub-test: Verify updated node storage");
+
+        // Verify that we can still read entries
+        let verify_tx2 = RocksTransaction::<false>::new(db.clone(), false);
+        let mut cursor2 = verify_tx2.cursor_read::<AccountTrieTable>().unwrap();
+        let mut updated_entries = 0;
+        let mut first_entry2 = cursor2.first().unwrap();
+
+        while first_entry2.is_some() {
+            updated_entries += 1;
+            first_entry2 = cursor2.next().unwrap();
+        }
+
+        // The number of entries should be at least as many as before
+        assert!(updated_entries >= initial_entries, "Node count should not decrease after update");
+    }
+
+    // Sub-test 5: Verify root recalculation consistency
+    {
+        println!("Running sub-test: Verify root recalculation consistency");
+
+        // Create the same state for verification
+        let mut verification_state = HashedPostState::default();
+        let account = Account {
+            nonce: 2,
+            balance: U256::from(2000),
+            bytecode_hash: Some(B256::from([2; 32])),
+        };
+        verification_state.accounts.insert(hashed_address, Some(account));
+
+        let mut storage = reth_trie::HashedStorage::default();
+        storage.storage.insert(storage_key, U256::from(84));
+        verification_state.storages.insert(hashed_address, storage);
+
+        // Calculate the root again with a fresh transaction
+        let read_tx3 = RocksTransaction::<false>::new(db.clone(), false);
+        let recomputed_root = calculate_state_root(&read_tx3, verification_state).unwrap();
+
+        assert_eq!(
+            updated_root, recomputed_root,
+            "Recomputed root should match the previously calculated root"
+        );
+    }
 }
+// fn test_calculate_state_root_with_updates1() {
+//     let (db, _temp_dir) = create_test_db();
+
+//     // Create an account and some storage data for testing
+//     let address = Address::from([1; 20]);
+//     let account =
+//         Account { nonce: 1, balance: U256::from(1000), bytecode_hash: Some(B256::from([2; 32])) };
+
+//     // Create a post state with the account
+//     let mut post_state = HashedPostState::default();
+//     let hashed_address = keccak256(address);
+//     post_state.accounts.insert(hashed_address, Some(account.clone()));
+
+//     // Add some storage items
+//     let mut storage = reth_trie::HashedStorage::default();
+//     let storage_key = B256::from([3; 32]);
+//     let storage_value = U256::from(42);
+//     storage.storage.insert(storage_key, storage_value);
+//     post_state.storages.insert(hashed_address, storage);
+
+//     // Create transactions for reading and writing
+//     let read_tx = RocksTransaction::<false>::new(db.clone(), false);
+//     let write_tx = RocksTransaction::<true>::new(db.clone(), true);
+
+//     // Calculate state root and store nodes
+//     let root = calculate_state_root_with_updates(&read_tx, &write_tx, post_state).unwrap();
+
+//     // Commit changes
+//     write_tx.commit().unwrap();
+//     println!("16");
+
+//     // Verify that nodes were stored by checking if we can retrieve them
+//     let verify_tx = RocksTransaction::<false>::new(db.clone(), false);
+//     println!("17");
+
+//     // Check if we can read from AccountTrieTable
+//     // We need to list entries to find the keys that were stored
+//     let mut cursor = verify_tx.cursor_read::<AccountTrieTable>().unwrap();
+//     let mut entries = 0;
+//     let mut first_entry = cursor.first().unwrap();
+//     println!("18");
+
+//     assert!(first_entry.is_some(), "No entries found in AccountTrieTable");
+//     println!("19");
+
+//     // Count entries and verify that we have something stored
+//     while first_entry.is_some() {
+//         entries += 1;
+//         first_entry = cursor.next().unwrap();
+//     }
+//     println!("20");
+
+//     assert!(entries > 0, "No trie nodes were stored in AccountTrieTable");
+//     println!("21");
+
+//     // Now let's modify the state and verify that nodes get updated correctly
+//     let mut updated_post_state = HashedPostState::default();
+//     let updated_account = Account {
+//         nonce: 2,                  // Increased nonce
+//         balance: U256::from(2000), // Increased balance
+//         bytecode_hash: Some(B256::from([2; 32])),
+//     };
+//     println!("22");
+
+//     updated_post_state.accounts.insert(hashed_address, Some(updated_account));
+//     println!("23");
+
+//     // Add modified storage
+//     let mut updated_storage = reth_trie::HashedStorage::default();
+//     updated_storage.storage.insert(storage_key, U256::from(84)); // Changed value
+//     updated_post_state.storages.insert(hashed_address, updated_storage);
+//     println!("24");
+
+//     // Create new transactions
+//     let read_tx2 = RocksTransaction::<false>::new(db.clone(), false);
+//     let write_tx2 = RocksTransaction::<true>::new(db.clone(), true);
+//     println!("25");
+
+//     // Calculate new state root and store updated nodes
+//     let updated_root =
+//         calculate_state_root_with_updates(&read_tx2, &write_tx2, updated_post_state.clone())
+//             .unwrap();
+//     println!("26");
+
+//     // Commit changes
+//     write_tx2.commit().unwrap();
+//     println!("27");
+
+//     // Verify that the root has changed
+//     assert_ne!(root, updated_root, "State root should change after update");
+//     println!("28");
+
+//     // Verify that we can still read entries
+//     let verify_tx2 = RocksTransaction::<false>::new(db.clone(), false);
+//     let mut cursor2 = verify_tx2.cursor_read::<AccountTrieTable>().unwrap();
+//     let mut updated_entries = 0;
+//     let mut first_entry2 = cursor2.first().unwrap();
+//     println!("29");
+
+//     while first_entry2.is_some() {
+//         updated_entries += 1;
+//         first_entry2 = cursor2.next().unwrap();
+//     }
+//     println!("30");
+
+//     // The number of entries should be at least as many as before
+//     assert!(updated_entries >= entries, "Node count should not decrease after update");
+//     println!("31");
+
+//     // Finally, verify that we can recompute the same root
+//     let read_tx3 = RocksTransaction::<false>::new(db.clone(), false);
+//     let recomputed_root = calculate_state_root(&read_tx3, updated_post_state).unwrap();
+//     println!("32");
+
+//     assert_eq!(
+//         updated_root, recomputed_root,
+//         "Recomputed root should match the previously calculated root"
+//     );
+//     println!("33");
+// }
 
 // fn test_dupsort_cursor_navigation() {
 //     let (db, _temp_dir) = create_test_db();

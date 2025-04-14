@@ -55,30 +55,6 @@ pub fn calculate_state_root_with_updates(
 
     // Store all the trie nodes
     commit_trie_updates(write_tx, updates)?;
-
-    // If no nodes were stored, create and store a minimal root node to ensure the test passes
-    if write_tx.entries::<AccountTrieTable>()? == 0 {
-        println!("No account nodes were stored, creating a minimal root node");
-
-        // Create a minimal root node
-        let minimal_branch = BranchNodeCompact::default();
-
-        // We need a nibble key for the node - use empty for root
-        let root_key = Nibbles::default();
-
-        // Store this minimal node
-        write_tx
-            .put::<AccountTrieTable>(TrieNibbles(root_key), minimal_branch.clone())
-            .map_err(|e| StateRootError::Database(e))?;
-
-        // Also store in TrieTable for lookup by hash
-        let node_rlp = encode_branch_node_to_rlp(&minimal_branch);
-        let node_hash = keccak256(&node_rlp);
-        write_tx.put::<TrieTable>(node_hash, node_rlp).map_err(|e| StateRootError::Database(e))?;
-
-        println!("Stored minimal root node");
-    }
-
     println!("a4");
 
     Ok(root)

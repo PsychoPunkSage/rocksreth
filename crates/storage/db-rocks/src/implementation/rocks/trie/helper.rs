@@ -7,9 +7,14 @@ use reth_db::transaction::DbTx;
 use reth_db_api::transaction::DbTxMut;
 use reth_execution_errors::StateRootError;
 use reth_trie::{
-    hashed_cursor::HashedPostStateCursorFactory, updates::TrieUpdates, BranchNodeCompact,
-    HashedPostState, Nibbles, StateRoot, StoredNibbles,
+    hashed_cursor::HashedPostStateCursorFactory, updates::TrieUpdates, AccountProof,
+    BranchNodeCompact, HashedPostState, Nibbles, StateRoot, StorageProof, StoredNibbles,
 };
+use reth_trie_common::{MultiProof, StorageMultiProof};
+
+////////////////////////////
+// STATE ROOT CALCULATION //
+////////////////////////////
 
 /// Helper function to calculate state root directly from post state
 pub fn calculate_state_root(
@@ -133,3 +138,10 @@ fn encode_branch_node_to_rlp(node: &BranchNodeCompact) -> Vec<u8> {
 
     result
 }
+
+///////////
+// PROOF //
+///////////
+
+// / Adapter to Connect RocksDB and RETH proof
+// pub fn genrate_account_proof() -> Result<TriePr> {}

@@ -10,7 +10,8 @@ use reth_db::{
 };
 use reth_db_api::cursor::{DbCursorRO, DbDupCursorRO, DbDupCursorRW};
 use reth_db_api::table::Table;
-use reth_trie::{BranchNodeCompact, Nibbles, StoredNibbles, TrieMask};
+use reth_trie::{proof::Proof, BranchNodeCompact, Nibbles, StorageProof, StoredNibbles, TrieMask};
+use reth_trie_common::{AccountProof, MultiProof, StorageMultiProof};
 use rocksdb::{Options, DB};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -43,6 +44,45 @@ fn create_test_db() -> (Arc<DB>, TempDir) {
     let db = DB::open_cf_descriptors(&opts, path, cf_descriptors).unwrap();
 
     (Arc::new(db), temp_dir)
+}
+
+fn setup_test_state(
+    read_tx: &RocksTransaction<false>,
+    write_tx: &RocksTransaction<true>,
+) -> (B256, Address, Address, B256) {
+    // Create test Accounts
+    let address1 = Address::from([1; 20]);
+    let hashed_address1 = keccak256(address1);
+    let address2 = Address::from([1; 20]);
+    let hashed_address2 = keccak256(address2);
+
+    let account1 = Account {
+        nonce: 1,
+        balance: U256::from(1000),
+        bytecode_hash: Some(B256::from([0x11; 32])),
+    };
+
+    let account2 = Account {
+        nonce: 5,
+        balance: U256::from(5000),
+        bytecode_hash: Some(B256::from([0x22; 32])),
+    };
+
+    let storage_key = B256::from([0x33; 32]);
+    let storage_value = U256::from(42);
+
+    let mut post_state = HashedPostState::default();
+    post_state.accounts.insert(hashed_address1, Some(account1));
+    post_state.accounts.insert(hashed_address2, Some(account2));
+
+    let mut storage = reth_trie::HashedStorage::default();
+    storage.storage.insert(storage_key, storage_value);
+    post_state.storages.insert(hashed_address1, storage);
+
+    // Calculate state root and commit trie
+    let state_root = calculate_state_root_with_updates(read_tx, write_tx, post_state).unwrap();
+
+    (state_root, address1, address2, storage_key)
 }
 
 fn create_trie_node_value(nibbles_str: &str, node_hash: B256) -> TrieNodeValue {
@@ -553,4 +593,43 @@ fn test_calculate_state_root_with_updates() {
             "Recomputed root should match the previously calculated root"
         );
     }
+}
+
+#[test]
+fn test_account_proof_generation() {
+    let (db, _temp_dir) = create_test_db();
+
+    // Setup initial state
+    let read_tx = RocksTransaction::<false>::new(db.clone(), false);
+    let write_tx = RocksTransaction::<true>::new(db.clone(), true);
+    let (state_root, address1, _, _) = setup_test_state(&read_tx, &write_tx);
+
+    // Generate a proof for account1
+    let proof_tx = RocksTransaction::<false>::new(db.clone(), false);
+
+    // Create a proof generator using RETH's Proof struct
+    let proof_generator =
+        Proof::new(proof_tx.trie_cursor_factory(), proof_tx.hashed_cursor_factory());
+
+    // Generate account proof (with no storage slots)
+    let account_proof =
+        proof_generator.account_proof(address1, &[]).expect("Failed to generate account proof");
+
+    // Verify the proof contains data
+    assert!(!account_proof.proof.is_empty(), "Account proof should not be empty");
+    println!("Generated account proof with {} nodes", account_proof.proof.len());
+
+    println!("State root: {}", state_root);
+    println!("Storage root: {}", account_proof.storage_root);
+
+    let account_nibbles = TrieNibbles(Nibbles::unpack(keccak256(address1)));
+    let account = proof_tx.get_account(account_nibbles).unwrap();
+    println!("Account from DB: {:?}", account);
+
+    // Verify the proof matches the state root
+    assert!(account_proof.verify(state_root).is_ok(), "Account proof verification should succeed");
+    // assert!(
+    //     account_proof.verify(account_proof.storage_root).is_ok(),
+    //     "Account proof verification should succeed"
+    // );
 }

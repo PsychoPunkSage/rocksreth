@@ -9,17 +9,27 @@ use reth_db_api::{
     DatabaseError,
 };
 use rocksdb::{Direction, IteratorMode, ReadOptions, DB};
-use std::ops::Bound;
 use std::ops::RangeBounds;
 use std::result::Result::Ok;
 use std::sync::{Arc, Mutex};
+use std::{marker::PhantomData, ops::Bound};
 
 /// RocksDB cursor implementation
 pub struct RocksCursor<T: Table, const WRITE: bool> {
     db: Arc<DB>,
     cf: CFPtr,
-    // Store the current key-value pair
-    current_item: Option<(Box<[u8]>, Box<[u8]>)>,
+    // // Store the current key-value pair
+    // current_item: Option<(Box<[u8]>, Box<[u8]>)>,
+    // iterator: Option<rocksdb::DBIterator<'static>>,
+    // iterator: Option<rocksdb::DBIterator<'static>>,
+    // Current position with cached key and value
+    // current_position: Mutex<Option<(T::Key, T::Value)>>,
+    current_key_bytes: Mutex<Option<Vec<u8>>>,
+    current_value_bytes: Mutex<Option<Vec<u8>>>,
+    // Next seek position to track where we were
+    next_seek_key: Mutex<Option<Vec<u8>>>,
+    // Read options
+    read_opts: ReadOptions,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -29,221 +39,372 @@ where
 {
     // pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
     pub(crate) fn new(db: Arc<DB>, cf: CFPtr) -> Result<Self, DatabaseError> {
-        let mut cursor = Self { db, cf, current_item: None, _marker: std::marker::PhantomData };
+        // let mut cursor = Self{db,
+        //     cf_ptr,
+        //     iterator: Mutex::new(None),
+        //     current_position: Mutex::new(None),
+        //     read_opts: ReadOptions::default(),
+        //     _marker: PhantomData,}
 
-        // Position at the first item
-        let _ = cursor.reset_to_first()?;
+        // // Position at the first item
+        // let _ = cursor.first()?;
 
-        Ok(cursor)
+        // Ok(cursor)
+        Ok(Self {
+            db,
+            cf,
+            next_seek_key: Mutex::new(None),
+            // current_position: Mutex::new(None),
+            current_key_bytes: Mutex::new(None),
+            current_value_bytes: Mutex::new(None),
+            read_opts: ReadOptions::default(),
+            _marker: PhantomData,
+        })
     }
 
-    // Reset cursor position to the first key
-    fn reset_to_first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError>
-    where
-        T::Value: Decompress,
-    {
-        // Clone the Arc references to avoid borrowing issues
-        let db_clone = self.db.clone();
-        let cf = unsafe { &*self.cf };
+    /// Get the column family reference safely
+    #[inline]
+    fn get_cf(&self) -> &rocksdb::ColumnFamily {
+        // Safety: The cf_ptr is guaranteed to be valid as long as the DB is alive,
+        // and we hold an Arc to the DB
+        unsafe { &*self.cf }
+    }
 
-        // Create a new iterator
-        let mut iter = db_clone.iterator_cf_opt(cf, ReadOptions::default(), IteratorMode::Start);
+    /// Create a single-use iterator for a specific operation
+    fn create_iterator(&self, mode: IteratorMode) -> rocksdb::DBIterator {
+        let cf = self.get_cf();
+        self.db.iterator_cf_opt(cf, ReadOptions::default(), mode)
+    }
+
+    /// Get the current key/value pair
+    fn get_current(&self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        // Get the current key bytes
+        let key_bytes = {
+            let key_guard = match self.current_key_bytes.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+
+            match &*key_guard {
+                Some(bytes) => bytes.clone(),
+                None => return Ok(None),
+            }
+        };
+
+        // Get the current value bytes
+        let value_bytes = {
+            let value_guard = match self.current_value_bytes.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+
+            match &*value_guard {
+                Some(bytes) => bytes.clone(),
+                None => return Ok(None),
+            }
+        };
+
+        // Decode the key and value
+        match T::Key::decode(&key_bytes) {
+            Ok(key) => match T::Value::decompress(&value_bytes) {
+                Ok(value) => Ok(Some((key, value))),
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(DatabaseError::Other(format!("Key decode error: {}", e))),
+        }
+    }
+
+    /// Update the current position
+    fn update_position(&self, key_bytes: Vec<u8>, value_bytes: Vec<u8>) {
+        // Update the current key
+        let mut key_guard = match self.current_key_bytes.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        *key_guard = Some(key_bytes);
+
+        // Update the current value
+        let mut value_guard = match self.current_value_bytes.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        *value_guard = Some(value_bytes);
+    }
+
+    /// Clear the current position
+    fn clear_position(&self) {
+        // Clear the current key
+        let mut key_guard = match self.current_key_bytes.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        *key_guard = None;
+
+        // Clear the current value
+        let mut value_guard = match self.current_value_bytes.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        *value_guard = None;
+    }
+
+    /// Get the first key/value pair from the database
+    fn get_first(&self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let cf = self.get_cf();
+
+        // Create an iterator that starts at the beginning
+        let mut iter = self.create_iterator(IteratorMode::Start);
 
         // Get the first item
-        let next_item = iter.next();
+        match iter.next() {
+            Some(Ok((key_bytes, value_bytes))) => {
+                // Update the current position
+                self.update_position(key_bytes.to_vec(), value_bytes.to_vec());
 
-        // Process the result
-        match next_item {
-            Some(Ok((k, v))) => {
-                // Store the current key-value pair
-                self.current_item = Some((k.clone(), v.clone()));
-
-                // Decode and return
-                Ok(Some((
-                    T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                    T::Value::decompress(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                )))
+                // Try to decode the key and value
+                match T::Key::decode(&key_bytes) {
+                    Ok(key) => match T::Value::decompress(&value_bytes) {
+                        Ok(value) => Ok(Some((key, value))),
+                        Err(e) => Err(e),
+                    },
+                    Err(e) => Err(DatabaseError::Other(format!("Key decode error: {}", e))),
+                }
             }
+            Some(Err(e)) => Err(DatabaseError::Other(format!("RocksDB iterator error: {}", e))),
             None => {
-                self.current_item = None;
+                // No entries, clear the current position
+                self.clear_position();
                 Ok(None)
             }
-            Some(Err(e)) => Err(DatabaseError::Other(e.to_string())),
         }
     }
 
-    // Reset cursor position to a specific key
-    fn reset_to_key(
-        &mut self,
-        key_bytes: &[u8],
-        direction: Direction,
-    ) -> Result<Option<(T::Key, T::Value)>, DatabaseError>
-    where
-        T::Value: Decompress,
-    {
-        // Clone the Arc references to avoid borrowing issues
-        let db_clone = self.db.clone();
-        let cf = unsafe { &*self.cf };
-        // Create a new iterator
-        let mut iter = db_clone.iterator_cf_opt(
+    /// Get the last key/value pair from the database
+    fn get_last(&self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let cf = self.get_cf();
+
+        // Create an iterator that starts at the end
+        let mut iter = self.create_iterator(IteratorMode::End);
+
+        // Get the last item
+        match iter.next() {
+            Some(Ok((key_bytes, value_bytes))) => {
+                // Update the current position
+                self.update_position(key_bytes.to_vec(), value_bytes.to_vec());
+
+                // Try to decode the key and value
+                match T::Key::decode(&key_bytes) {
+                    Ok(key) => match T::Value::decompress(&value_bytes) {
+                        Ok(value) => Ok(Some((key, value))),
+                        Err(e) => Err(e),
+                    },
+                    Err(e) => Err(DatabaseError::Other(format!("Key decode error: {}", e))),
+                }
+            }
+            Some(Err(e)) => Err(DatabaseError::Other(format!("RocksDB iterator error: {}", e))),
+            None => {
+                // No entries, clear the current position
+                self.clear_position();
+                Ok(None)
+            }
+        }
+    }
+
+    /// Seek to a specific key
+    fn get_seek(&self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let cf = self.get_cf();
+
+        // Encode the key
+        let encoded_key = key.encode();
+
+        // Create an iterator that starts at the given key
+        let mut iter =
+            self.create_iterator(IteratorMode::From(encoded_key.as_ref(), Direction::Forward));
+
+        // Get the first item (the one at or after the key)
+        match iter.next() {
+            Some(Ok((key_bytes, value_bytes))) => {
+                // Update the current position
+                self.update_position(key_bytes.to_vec(), value_bytes.to_vec());
+
+                // Try to decode the key and value
+                match T::Key::decode(&key_bytes) {
+                    Ok(key) => match T::Value::decompress(&value_bytes) {
+                        Ok(value) => Ok(Some((key, value))),
+                        Err(e) => Err(e),
+                    },
+                    Err(e) => Err(DatabaseError::Other(format!("Key decode error: {}", e))),
+                }
+            }
+            Some(Err(e)) => Err(DatabaseError::Other(format!("RocksDB iterator error: {}", e))),
+            None => {
+                // No entries after the given key, clear the current position
+                self.clear_position();
+                Ok(None)
+            }
+        }
+    }
+
+    fn get_seek_exact(&self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        let cf = self.get_cf();
+
+        // Encode the key
+        let encoded_key = key.encode();
+
+        // Create a new ReadOptions for this specific query
+        let read_opts = ReadOptions::default();
+
+        // Create an iterator that starts at the given key
+        let mut iter = self.db.iterator_cf_opt(
             cf,
-            ReadOptions::default(),
-            IteratorMode::From(key_bytes, direction),
+            read_opts,
+            IteratorMode::From(encoded_key.as_ref(), Direction::Forward),
         );
 
-        // Get the next item
-        let next_item = iter.next();
+        // Check the first item (should be exactly at or after the key)
+        if let Some(Ok((key_bytes, value_bytes))) = iter.next() {
+            // Check if this is an exact match
+            if key_bytes.as_ref() == encoded_key.as_ref() {
+                // Update the current position
+                self.update_position(key_bytes.to_vec(), value_bytes.to_vec());
 
-        // Process the result
-        match next_item {
-            Some(Ok((k, v))) => {
-                // Store the current key-value pair
-                self.current_item = Some((k.clone(), v.clone()));
-
-                // Decode and return
-                Ok(Some((
-                    T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                    T::Value::decompress(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                )))
-            }
-            None => {
-                self.current_item = None;
+                // Try to decode the key and value
+                match T::Key::decode(&key_bytes) {
+                    Ok(decoded_key) => match T::Value::decompress(&value_bytes) {
+                        Ok(value) => Ok(Some((decoded_key, value))),
+                        Err(e) => Err(e),
+                    },
+                    Err(e) => Err(DatabaseError::Other(format!("Key decode error: {}", e))),
+                }
+            } else {
+                // Not an exact match, don't update position
                 Ok(None)
             }
-            Some(Err(e)) => Err(DatabaseError::Other(e.to_string())),
+        } else {
+            // No items at or after the key
+            Ok(None)
         }
     }
 
-    // Reset cursor position to the end
-    fn reset_to_last(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError>
-    where
-        T::Value: Decompress,
-    {
-        // Clone the Arc references to avoid borrowing issues
-        let db_clone = self.db.clone();
-        let cf = unsafe { &*self.cf };
+    /// Get the next key/value pair
+    fn get_next(&self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        // Get the current key bytes
+        let current_key_bytes = {
+            let key_guard = match self.current_key_bytes.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
 
-        // Create a new iterator
-        let mut iter = db_clone.iterator_cf_opt(cf, ReadOptions::default(), IteratorMode::End);
+            match &*key_guard {
+                Some(bytes) => bytes.clone(),
+                None => {
+                    // If we don't have a current position, get the first item
+                    return self.get_first();
+                }
+            }
+        };
 
-        // Get the next item
-        let next_item = iter.next();
+        // Create an iterator that starts right after the current position
+        let mut iter =
+            self.create_iterator(IteratorMode::From(&current_key_bytes, Direction::Forward));
 
-        // Process the result
-        match next_item {
-            Some(Ok((k, v))) => {
-                // Store the current key-value pair
-                self.current_item = Some((k.clone(), v.clone()));
-
-                // Decode and return
-                Ok(Some((
-                    T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                    T::Value::decompress(&v).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                )))
+        // Skip the current item (which is the one we're positioned at)
+        match iter.next() {
+            Some(Ok(_)) => {}
+            Some(Err(e)) => {
+                return Err(DatabaseError::Other(format!("RocksDB iterator error: {}", e)))
             }
             None => {
-                self.current_item = None;
+                // No entries, clear the current position
+                self.clear_position();
+                return Ok(None);
+            }
+        }
+
+        // Get the next item
+        match iter.next() {
+            Some(Ok((key_bytes, value_bytes))) => {
+                // Update the current position
+                self.update_position(key_bytes.to_vec(), value_bytes.to_vec());
+
+                // Try to decode the key and value
+                match T::Key::decode(&key_bytes) {
+                    Ok(key) => match T::Value::decompress(&value_bytes) {
+                        Ok(value) => Ok(Some((key, value))),
+                        Err(e) => Err(e),
+                    },
+                    Err(e) => Err(DatabaseError::Other(format!("Key decode error: {}", e))),
+                }
+            }
+            Some(Err(e)) => Err(DatabaseError::Other(format!("RocksDB iterator error: {}", e))),
+            None => {
+                // No more entries, clear the current position
+                self.clear_position();
                 Ok(None)
             }
-            Some(Err(e)) => Err(DatabaseError::Other(e.to_string())),
         }
     }
 
-    // Move to next item after current position
-    fn move_to_next(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError>
-    where
-        T::Value: Decompress,
-    {
-        if let Some((current_key, _)) = &self.current_item {
-            // Clone the Arc references and the current key to avoid borrowing issues
-            let db_clone = self.db.clone();
-            let cf = unsafe { &*self.cf };
-            let key_clone = current_key.clone();
+    /// Get the previous key/value pair
+    fn get_prev(&self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
+        // Get the current key bytes
+        let current_key_bytes = {
+            let key_guard = match self.current_key_bytes.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
 
-            // Create a new iterator positioned at the current key
-            let mut iter = db_clone.iterator_cf_opt(
-                cf,
-                ReadOptions::default(),
-                IteratorMode::From(&key_clone, Direction::Forward),
-            );
-
-            // Skip the current key
-            let _ = iter.next();
-
-            // Get the next item
-            let next_item = iter.next();
-
-            // Process the result
-            match next_item {
-                Some(Ok((k, v))) => {
-                    // Store the current key-value pair
-                    self.current_item = Some((k.clone(), v.clone()));
-
-                    // Decode and return
-                    Ok(Some((
-                        T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                        T::Value::decompress(&v)
-                            .map_err(|e| DatabaseError::Other(e.to_string()))?,
-                    )))
-                }
+            match &*key_guard {
+                Some(bytes) => bytes.clone(),
                 None => {
-                    self.current_item = None;
-                    Ok(None)
+                    // If we don't have a current position, get the last item
+                    return self.get_last();
                 }
-                Some(Err(e)) => Err(DatabaseError::Other(e.to_string())),
             }
-        } else {
-            // If no current key, start from the beginning
-            self.reset_to_first()
+        };
+
+        // Create an iterator that starts right before the current position
+        let mut iter =
+            self.create_iterator(IteratorMode::From(&current_key_bytes, Direction::Reverse));
+
+        // Skip the current item (which is the one we're positioned at)
+        match iter.next() {
+            Some(Ok(_)) => {}
+            Some(Err(e)) => {
+                return Err(DatabaseError::Other(format!("RocksDB iterator error: {}", e)))
+            }
+            None => {
+                // No entries, clear the current position
+                self.clear_position();
+                return Ok(None);
+            }
         }
-    }
 
-    // Move to previous item before current position
-    fn move_to_prev(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError>
-    where
-        T::Value: Decompress,
-    {
-        if let Some((current_key, _)) = &self.current_item {
-            // Clone the Arc references and the current key to avoid borrowing issues
-            let db_clone = self.db.clone();
-            let cf = unsafe { &*self.cf };
-            let key_clone = current_key.clone();
+        // Get the previous item
+        match iter.next() {
+            Some(Ok((key_bytes, value_bytes))) => {
+                // Update the current position
+                self.update_position(key_bytes.to_vec(), value_bytes.to_vec());
 
-            // Create a new iterator positioned at the current key in reverse direction
-            let mut iter = db_clone.iterator_cf_opt(
-                cf,
-                ReadOptions::default(),
-                IteratorMode::From(&key_clone, Direction::Reverse),
-            );
-
-            // Skip the current key
-            let _ = iter.next();
-
-            // Get the previous item
-            let next_item = iter.next();
-
-            // Process the result
-            match next_item {
-                Some(Ok((k, v))) => {
-                    // Store the current key-value pair
-                    self.current_item = Some((k.clone(), v.clone()));
-
-                    // Decode and return
-                    Ok(Some((
-                        T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                        T::Value::decompress(&v)
-                            .map_err(|e| DatabaseError::Other(e.to_string()))?,
-                    )))
+                // Try to decode the key and value
+                match T::Key::decode(&key_bytes) {
+                    Ok(key) => match T::Value::decompress(&value_bytes) {
+                        Ok(value) => Ok(Some((key, value))),
+                        Err(e) => Err(e),
+                    },
+                    Err(e) => Err(DatabaseError::Other(format!("Key decode error: {}", e))),
                 }
-                None => {
-                    self.current_item = None;
-                    Ok(None)
-                }
-                Some(Err(e)) => Err(DatabaseError::Other(e.to_string())),
             }
-        } else {
-            // If no current key, start from the end
-            self.reset_to_last()
+            Some(Err(e)) => Err(DatabaseError::Other(format!("RocksDB iterator error: {}", e))),
+            None => {
+                // No more entries, clear the current position
+                self.clear_position();
+                Ok(None)
+            }
         }
     }
 }
@@ -254,55 +415,256 @@ where
     T::Value: Decompress,
 {
     fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.reset_to_first()
+        // self.reset_to_first()
+        // Get the first item
+        // let result = self.get_first()?;
+
+        // // Update the current position
+        // let mut pos_guard = match self.current_position.lock() {
+        //     Ok(guard) => guard,
+        //     Err(poisoned) => poisoned.into_inner(),
+        // };
+
+        // *pos_guard = result;
+
+        // Ok(result)
+        self.get_first()
     }
 
     fn seek_exact(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        // Clone the key before encoding it
-        let key_clone = key.clone();
-        let key_bytes = key_clone.encode();
+        // // Clone the key before encoding it
+        // let key_clone = key.clone();
+        // let key_bytes = key_clone.encode();
 
-        let result = self.reset_to_key(key_bytes.as_ref(), Direction::Forward)?;
+        // let result = self.reset_to_key(key_bytes.as_ref(), Direction::Forward)?;
 
-        // Check if the found key matches exactly
-        if let Some((found_key, value)) = result {
-            if found_key == key {
-                return Ok(Some((found_key, value)));
-            }
-        }
+        // // Check if the found key matches exactly
+        // if let Some((found_key, value)) = result {
+        //     if found_key == key {
+        //         return Ok(Some((found_key, value)));
+        //     }
+        // }
 
-        // No exact match found
-        Ok(None)
+        // // No exact match found
+        // Ok(None)
+
+        self.get_seek_exact(key)
     }
 
     fn seek(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        // Clone the key before encoding it
-        let key_clone = key.clone();
-        let key_bytes = key_clone.encode();
+        // let key_bytes = key.encode();
+        // let cf = unsafe { &*self.cf };
 
-        self.reset_to_key(key_bytes.as_ref(), Direction::Forward)
+        // let key_vec: Vec<u8> = key_bytes.into();
+
+        // // Create an iterator positioned at or after the key
+        // let mut iter = self.db.iterator_cf_opt(
+        //     cf,
+        //     ReadOptions::default(),
+        //     IteratorMode::From(&key_vec, Direction::Forward),
+        // );
+
+        // // Get the first item at or after the key
+        // if let Some(Ok((k, v))) = iter.next() {
+        //     // Store current key
+        //     self.current_key = Some(k.to_vec());
+
+        //     // Decode and return
+        //     let key = T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?;
+        //     let value =
+        //         T::Value::decompress(&v).map_err(|e| DatabaseError::Other(e.to_string()))?;
+        //     Ok(Some((key, value)))
+        // } else {
+        //     self.current_key = None;
+        //     Ok(None)
+        // }
+        // Get the item at or after the key
+        // let result = self.get_seek(key)?;
+
+        // // Update the current position
+        // let mut pos_guard = match self.current_position.lock() {
+        //     Ok(guard) => guard,
+        //     Err(poisoned) => poisoned.into_inner(),
+        // };
+
+        // *pos_guard = result.clone();
+
+        // Ok(result)
+        self.get_seek(key)
     }
 
     fn next(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.move_to_next()
+        // // self.move_to_next()
+        // if self.current_key.is_none() {
+        //     return self.first();
+        // }
+
+        // let cf = unsafe { &*self.cf };
+        // let current_key = self.current_key.as_ref().unwrap();
+
+        // // Create an iterator positioned at current key
+        // let mut iter = self.db.iterator_cf_opt(
+        //     cf,
+        //     ReadOptions::default(),
+        //     IteratorMode::From(current_key, Direction::Forward),
+        // );
+
+        // // Skip the current key
+        // let _ = iter.next();
+
+        // // Get the next item
+        // if let Some(Ok((k, v))) = iter.next() {
+        //     // Store new current key
+        //     self.current_key = Some(k.to_vec());
+
+        //     // Decode and return
+        //     let key = T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?;
+        //     let value =
+        //         T::Value::decompress(&v).map_err(|e| DatabaseError::Other(e.to_string()))?;
+        //     Ok(Some((key, value)))
+        // } else {
+        //     self.current_key = None;
+        //     Ok(None)
+        // }
+        // Get the next item
+        // let result = self.get_next()?;
+
+        // // Update the current position
+        // let mut pos_guard = match self.current_position.lock() {
+        //     Ok(guard) => guard,
+        //     Err(poisoned) => poisoned.into_inner(),
+        // };
+
+        // *pos_guard = result.clone();
+
+        // Ok(result)
+        self.get_next()
     }
 
     fn prev(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.move_to_prev()
+        // // self.move_to_prev()
+        // if self.current_key.is_none() {
+        //     return self.last();
+        // }
+
+        // let cf = unsafe { &*self.cf };
+        // let current_key = self.current_key.as_ref().unwrap();
+
+        // // Create a reverse iterator positioned at current key
+        // let mut iter = self.db.iterator_cf_opt(
+        //     cf,
+        //     ReadOptions::default(),
+        //     IteratorMode::From(current_key, Direction::Reverse),
+        // );
+
+        // // Skip the current key
+        // let _ = iter.next();
+
+        // // Get the previous item
+        // if let Some(Ok((k, v))) = iter.next() {
+        //     // Store new current key
+        //     self.current_key = Some(k.to_vec());
+
+        //     // Decode and return
+        //     let key = T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?;
+        //     let value =
+        //         T::Value::decompress(&v).map_err(|e| DatabaseError::Other(e.to_string()))?;
+        //     Ok(Some((key, value)))
+        // } else {
+        //     self.current_key = None;
+        //     Ok(None)
+        // }
+        // Get the previous item
+        // let result = self.get_prev()?;
+
+        // // Update the current position
+        // let mut pos_guard = match self.current_position.lock() {
+        //     Ok(guard) => guard,
+        //     Err(poisoned) => poisoned.into_inner(),
+        // };
+
+        // *pos_guard = result.clone();
+
+        // Ok(result)
+        self.get_prev()
     }
 
     fn last(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        self.reset_to_last()
+        // self.reset_to_last()
+        // let cf = unsafe { &*self.cf };
+
+        // // Create an iterator starting from the end
+        // let mut iter = self.db.iterator_cf_opt(cf, ReadOptions::default(), IteratorMode::End);
+
+        // // Get the last item
+        // if let Some(Ok((k, v))) = iter.next() {
+        //     // Store current key
+        //     self.current_key = Some(k.to_vec());
+
+        //     // Decode and return
+        //     let key = T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?;
+        //     let value =
+        //         T::Value::decompress(&v).map_err(|e| DatabaseError::Other(e.to_string()))?;
+        //     Ok(Some((key, value)))
+        // } else {
+        //     self.current_key = None;
+        //     Ok(None)
+        // }
+        // Get the last item
+        // let result = self.get_last()?;
+
+        // // Update the current position
+        // let mut pos_guard = match self.current_position.lock() {
+        //     Ok(guard) => guard,
+        //     Err(poisoned) => poisoned.into_inner(),
+        // };
+
+        // *pos_guard = result.clone();
+
+        // Ok(result)
+        self.get_last()
     }
 
     fn current(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        match &self.current_item {
-            Some((k, v)) => Ok(Some((
-                T::Key::decode(k).map_err(|e| DatabaseError::Other(e.to_string()))?,
-                T::Value::decompress(v).map_err(|e| DatabaseError::Other(e.to_string()))?,
-            ))),
-            None => Ok(None),
-        }
+        // match &self.current_item {
+        //     Some((k, v)) => Ok(Some((
+        //         T::Key::decode(k).map_err(|e| DatabaseError::Other(e.to_string()))?,
+        //         T::Value::decompress(v).map_err(|e| DatabaseError::Other(e.to_string()))?,
+        //     ))),
+        //     None => Ok(None),
+        // }
+        // if let Some(current_key) = &self.current_key {
+        //     let cf = unsafe { &*self.cf };
+
+        //     // Create an iterator positioned at current key
+        //     let mut iter = self.db.iterator_cf_opt(
+        //         cf,
+        //         ReadOptions::default(),
+        //         IteratorMode::From(current_key, Direction::Forward),
+        //     );
+
+        //     // Get the current item
+        //     if let Some(Ok((k, v))) = iter.next() {
+        //         if k.as_ref() == current_key.as_slice() {
+        //             // Decode and return
+        //             let key =
+        //                 T::Key::decode(&k).map_err(|e| DatabaseError::Other(e.to_string()))?;
+        //             let value = T::Value::decompress(&v)
+        //                 .map_err(|e| DatabaseError::Other(e.to_string()))?;
+        //             return Ok(Some((key, value)));
+        //         }
+        //     }
+        // }
+
+        // // No current item
+        // Ok(None)
+        // let pos_guard = match self.current_position.lock() {
+        //     Ok(guard) => guard,
+        //     Err(poisoned) => poisoned.into_inner(),
+        // };
+
+        // Ok(pos_guard.clone())
+        self.get_current()
     }
 
     fn walk(&mut self, start_key: Option<T::Key>) -> Result<Walker<'_, T, Self>, DatabaseError>
@@ -736,37 +1098,65 @@ where
     T::Value: Decompress,
 {
     fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let mut cursor_guard = self.cursor.lock().unwrap();
-        cursor_guard.first()
+        // let mut cursor_guard = self.cursor.lock().unwrap();
+        // cursor_guard.first()
+        let mut guard = match self.cursor.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.first()
     }
 
     fn seek_exact(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let mut cursor_guard = self.cursor.lock().unwrap();
+        let mut cursor_guard = match self.cursor.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         cursor_guard.seek_exact(key)
     }
 
     fn seek(&mut self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let mut cursor_guard = self.cursor.lock().unwrap();
+        // let mut cursor_guard = self.cursor.lock().unwrap();
+        let mut cursor_guard = match self.cursor.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         cursor_guard.seek(key)
     }
 
     fn next(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let mut cursor_guard = self.cursor.lock().unwrap();
+        // let mut cursor_guard = self.cursor.lock().unwrap();
+        let mut cursor_guard = match self.cursor.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         cursor_guard.next()
     }
 
     fn prev(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let mut cursor_guard = self.cursor.lock().unwrap();
+        // let mut cursor_guard = self.cursor.lock().unwrap();
+        let mut cursor_guard = match self.cursor.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         cursor_guard.prev()
     }
 
     fn last(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let mut cursor_guard = self.cursor.lock().unwrap();
+        // let mut cursor_guard = self.cursor.lock().unwrap();
+        let mut cursor_guard = match self.cursor.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         cursor_guard.last()
     }
 
     fn current(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let mut cursor_guard = self.cursor.lock().unwrap();
+        // let mut cursor_guard = self.cursor.lock().unwrap();
+        let mut cursor_guard = match self.cursor.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         cursor_guard.current()
     }
 

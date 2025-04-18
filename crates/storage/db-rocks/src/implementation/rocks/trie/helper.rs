@@ -10,7 +10,6 @@ use reth_trie::{
     hashed_cursor::HashedPostStateCursorFactory, updates::TrieUpdates, AccountProof,
     BranchNodeCompact, HashedPostState, Nibbles, StateRoot, StorageProof, StoredNibbles,
 };
-use reth_trie_common::{MultiProof, StorageMultiProof};
 
 ////////////////////////////
 // STATE ROOT CALCULATION //
@@ -39,7 +38,13 @@ pub fn calculate_state_root_with_updates(
     write_tx: &RocksTransaction<true>,
     post_state: HashedPostState,
 ) -> Result<B256, StateRootError> {
-    let prefix_sets = post_state.construct_prefix_sets().freeze();
+    println!("Post state account count: {}", post_state.accounts.len());
+    println!("Post state storage count: {}", post_state.storages.len());
+    println!("Post state storage count: {:?}", post_state);
+    // let prefix_sets = post_state.construct_prefix_sets().freeze();
+    let prefix_sets = post_state.construct_prefix_sets();
+    println!("Prefix sets: {:?}", prefix_sets);
+    let frozen_sets = prefix_sets.freeze();
     let state_sorted = post_state.into_sorted();
     // println!("a2");
 
@@ -48,7 +53,7 @@ pub fn calculate_state_root_with_updates(
         read_tx.trie_cursor_factory(),
         HashedPostStateCursorFactory::new(read_tx.hashed_cursor_factory(), &state_sorted),
     )
-    .with_prefix_sets(prefix_sets)
+    .with_prefix_sets(frozen_sets)
     .root_with_updates()?;
     // println!("a3");
 
@@ -138,10 +143,3 @@ fn encode_branch_node_to_rlp(node: &BranchNodeCompact) -> Vec<u8> {
 
     result
 }
-
-///////////
-// PROOF //
-///////////
-
-// / Adapter to Connect RocksDB and RETH proof
-// pub fn genrate_account_proof() -> Result<TriePr> {}

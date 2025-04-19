@@ -678,6 +678,77 @@ fn test_account_proof_generation() {
     println!("Verification with state root result: {:?}", state_root_verification);
 }
 
+// #[test]
+// fn test_rocks_hashed_account_cursor() {
+//     let (db, _temp_dir) = create_test_db();
+
+//     // Create a write transaction and insert some test accounts
+//     let write_tx = RocksTransaction::<true>::new(db.clone(), true);
+
+//     // Create test accounts
+//     let addr1 = keccak256(Address::from([1; 20]));
+//     let addr2 = keccak256(Address::from([2; 20]));
+//     let addr3 = keccak256(Address::from([3; 20]));
+
+//     println!("Test account addresses: {:?}, {:?}", addr1, addr2);
+
+//     let account1 =
+//         Account { nonce: 1, balance: U256::from(1000), bytecode_hash: Some(B256::from([1; 32])) };
+
+//     let account2 =
+//         Account { nonce: 2, balance: U256::from(2000), bytecode_hash: Some(B256::from([2; 32])) };
+
+//     let account3 =
+//         Account { nonce: 2, balance: U256::from(2000), bytecode_hash: Some(B256::from([3; 32])) };
+
+//     println!("Inserting test accounts");
+
+//     // Insert accounts into HashedAccounts table
+//     write_tx.put::<HashedAccounts>(addr1, account1.clone()).unwrap();
+//     write_tx.put::<HashedAccounts>(addr2, account2.clone()).unwrap();
+//     write_tx.put::<HashedAccounts>(addr2, account3.clone()).unwrap();
+
+//     // Commit transaction
+//     write_tx.commit().unwrap();
+//     println!("Transaction committed");
+
+//     // Verify accounts were stored
+//     let verify_tx = RocksTransaction::<false>::new(db.clone(), false);
+//     let acct1 = verify_tx.get::<HashedAccounts>(addr1).unwrap();
+//     let acct2 = verify_tx.get::<HashedAccounts>(addr2).unwrap();
+//     let acct2 = verify_tx.get::<HashedAccounts>(addr3).unwrap();
+//     println!("Verification: Account1: {:?}, Account2: {:?}", acct1, acct2);
+
+//     // Create a read transaction to test the cursor
+//     let read_tx = RocksTransaction::<false>::new(db.clone(), false);
+
+//     // Create and test hashed account cursor
+//     let hashed_factory = RocksHashedCursorFactory::new(&read_tx);
+//     let mut account_cursor = hashed_factory.hashed_account_cursor().unwrap();
+
+//     // Test seek
+//     println!("Testing seek()...");
+//     let result = account_cursor.seek(addr1).unwrap();
+//     println!("Seek result: {:?}", result);
+
+//     assert!(result.is_some(), "Failed to seek account");
+
+//     let (found_addr, found_account) = result.unwrap();
+//     assert_eq!(found_addr, addr1, "Found wrong account address");
+//     assert_eq!(found_account.nonce, account1.nonce, "Account nonce mismatch");
+
+//     // Test next
+//     println!("Testing next()...");
+//     let next_result = account_cursor.next().unwrap();
+//     println!("Next result: {:?}", next_result);
+
+//     assert!(next_result.is_some(), "Failed to get next account111");
+
+//     let (next_addr, next_account) = next_result.unwrap();
+//     assert_eq!(next_addr, addr2, "Found wrong next account address");
+//     assert_eq!(next_account.nonce, account2.nonce, "Next account nonce mismatch");
+// }
+
 #[test]
 fn test_rocks_cursor_basic() {
     let (db, _temp_dir) = create_test_db();

@@ -7,7 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Table storing the trie nodes.
 #[derive(Debug)]
-pub struct TrieTable;
+pub(crate) struct TrieTable;
 
 impl Table for TrieTable {
     const NAME: &'static str = "trie";
@@ -19,7 +19,7 @@ impl Table for TrieTable {
 
 /// Table storing account trie nodes.
 #[derive(Debug)]
-pub struct AccountTrieTable;
+pub(crate) struct AccountTrieTable;
 
 impl Table for AccountTrieTable {
     const NAME: &'static str = "account_trie";
@@ -31,7 +31,7 @@ impl Table for AccountTrieTable {
 
 /// Table storing storage trie nodes.
 #[derive(Debug)]
-pub struct StorageTrieTable;
+pub(crate) struct StorageTrieTable;
 
 impl Table for StorageTrieTable {
     const NAME: &'static str = "storage_trie";

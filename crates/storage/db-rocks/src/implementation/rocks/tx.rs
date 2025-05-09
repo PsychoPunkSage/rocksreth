@@ -14,7 +14,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-pub type CFPtr = *const ColumnFamily;
+pub(crate) type CFPtr = *const ColumnFamily;
 
 /// Generic transaction type for RocksDB
 pub struct RocksTransaction<const WRITE: bool> {

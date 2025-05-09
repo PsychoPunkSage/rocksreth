@@ -13,7 +13,7 @@ use reth_trie::hashed_cursor::HashedStorageCursor;
 use std::marker::PhantomData;
 
 /// Factory for creating hashed cursors specific to RocksDB
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RocksHashedCursorFactory<'tx> {
     tx: &'tx RocksTransaction<false>,
 }

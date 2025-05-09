@@ -57,141 +57,17 @@ RETH RocksDB Implementation Structure
 #![warn(missing_copy_implementations)]
 #![warn(rust_2018_idioms)]
 
-mod db;
 mod errors;
 mod implementation;
-mod metrics;
 mod tables;
 mod test;
-mod version;
 
 pub use errors::RocksDBError;
-use metrics::DatabaseMetrics;
-use std::{path::Path, sync::Arc};
-
 pub use implementation::rocks::trie::{calculate_state_root, calculate_state_root_with_updates};
-pub use implementation::rocks::RocksDB;
-pub use implementation::rocks::{tx::RocksTransaction, RocksDBConfig};
+pub use implementation::rocks::tx::RocksTransaction;
 pub use reth_primitives_traits::Account;
 pub use reth_trie::HashedPostState;
-
-/// Database environment for RocksDB
-#[derive(Debug)]
-pub struct DatabaseEnv {
-    /// The underlying RocksDB instance
-    inner: Arc<RocksDB>,
-    /// Metrics collector
-    metrics: Option<Arc<DatabaseMetrics>>,
-    /// Version manager
-    version_manager: Arc<version::VersionManager>,
-}
-
-// impl DatabaseEnv {
-//     /// Opens a new database environment
-//     pub fn open(path: &Path, config: RocksDBConfig) -> Result<Self, RocksDBError> {
-//         // Initialize RocksDB
-//         let inner = Arc::new(RocksDB::open(config)?);
-
-//         // Initialize version manager
-//         let version_manager = Arc::new(version::VersionManager::new(inner.as_ref())?);
-
-//         // Run migrations if needed
-//         if version_manager.needs_migration() {
-//             version_manager.migrate(inner.as_ref())?;
-//         }
-
-//         Ok(Self { inner, metrics: None, version_manager })
-//     }
-
-//     /// Enable metrics collection
-//     pub fn with_metrics(mut self) -> Self {
-//         self.metrics = Some(Arc::new(DatabaseMetrics::new()));
-//         self
-//     }
-
-//     /// Get reference to metrics
-//     pub fn metrics(&self) -> Option<Arc<DatabaseMetrics>> {
-//         self.metrics.clone()
-//     }
-
-//     /// Get database version
-//     pub fn version(&self) -> u32 {
-//         self.version_manager.current_version()
-//     }
-
-//     /// Compact the entire database
-//     pub fn compact(&self) -> Result<(), RocksDBError> {
-//         self.inner.compact_all()?;
-//         Ok(())
-//     }
-
-//     /// Get database statistics
-//     pub fn get_stats(&self) -> Option<String> {
-//         self.inner.get_statistics()
-//     }
-// }
-
-// impl reth_db_api::Database for DatabaseEnv {
-//     type TX = RocksTransaction<false>;
-//     type TXMut = RocksTransaction<true>;
-
-//     fn tx(&self) -> Result<Self::TX, reth_db_api::DatabaseError> {
-//         if let Some(metrics) = &self.metrics {
-//             metrics.record_tx_start(false);
-//         }
-//         self.inner.transaction().map_err(Into::into)
-//     }
-
-//     fn tx_mut(&self) -> Result<Self::TXMut, reth_db_api::DatabaseError> {
-//         if let Some(metrics) = &self.metrics {
-//             metrics.record_tx_start(true);
-//         }
-//         self.inner.transaction_mut().map_err(Into::into)
-//     }
-// }
-
-// impl Drop for DatabaseEnv {
-//     fn drop(&mut self) {
-//         // Ensure metrics are flushed
-//         if let Some(metrics) = &self.metrics {
-//             if let Some(stats) = self.get_stats() {
-//                 // Final metrics update
-//                 metrics.record_final_stats(&stats);
-//             }
-//         }
-//     }
-// }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use tempfile::TempDir;
-
-//     #[test]
-//     fn test_database_creation() {
-//         let temp_dir = TempDir::new().unwrap();
-//         let config = RocksDBConfig {
-//             path: temp_dir.path().to_str().unwrap().to_string(),
-//             ..Default::default()
-//         };
-
-//         let db = DatabaseEnv::open(temp_dir.path(), config).unwrap();
-//         assert_eq!(db.version(), 1);
-//     }
-
-//     #[test]
-//     fn test_metrics_collection() {
-//         let temp_dir = TempDir::new().unwrap();
-//         let config = RocksDBConfig {
-//             path: temp_dir.path().to_str().unwrap().to_string(),
-//             ..Default::default()
-//         };
-
-//         let db = DatabaseEnv::open(temp_dir.path(), config).unwrap().with_metrics();
-
-//         assert!(db.metrics().is_some());
-//     }
-// }
+pub use test::utils;
 
 // /*
 // > This codebase implements a RocksDB storage layer for RETH. At its core, it provides a way to store and retrieve blockchain data using RocksDB instead of MDBX. The implementation handles database operations through tables (like accounts, transactions, etc.) where each table is a separate column family in RocksDB.

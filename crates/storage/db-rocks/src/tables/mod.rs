@@ -1,10 +1,10 @@
-pub mod raw;
-pub mod trie;
-pub mod utils;
+pub(crate) mod raw;
+pub(crate) mod trie;
 
 use reth_db_api::table::Table;
 use reth_db_api::DatabaseError;
 use rocksdb::{ColumnFamilyDescriptor, Options};
+
 /// Trait for getting RocksDB-specific table configurations
 pub(crate) trait TableConfig: Table {
     /// Get column family options for this table
@@ -38,7 +38,7 @@ pub(crate) struct TableManagement;
 
 impl TableManagement {
     /// Create all column families for given database
-    pub fn create_column_families(
+    pub(crate) fn create_column_families(
         db: &mut rocksdb::DB,
         tables: &[&str],
     ) -> Result<(), DatabaseError> {
@@ -53,7 +53,7 @@ impl TableManagement {
     }
 
     /// Get all column family descriptors for all tables
-    pub fn get_all_column_family_descriptors() -> Vec<ColumnFamilyDescriptor> {
+    pub(crate) fn get_all_column_family_descriptors() -> Vec<ColumnFamilyDescriptor> {
         // WHAT IS TABLES/TABLE????
         use reth_db::Tables;
         Tables::ALL

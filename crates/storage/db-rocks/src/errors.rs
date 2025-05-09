@@ -1,4 +1,3 @@
-use std::fmt;
 use thiserror::Error;
 
 /// RocksDB specific errors
@@ -42,7 +41,7 @@ impl From<RocksDBError> for reth_db_api::DatabaseError {
             RocksDBError::TableOperation { name, operation } => {
                 Self::Other(format!("Table operation failed: {} - {}", name, operation))
             }
-            RocksDBError::Codec(msg) => Self::Decode,
+            RocksDBError::Codec(_msg) => Self::Decode,
             RocksDBError::Migration(msg) => Self::Other(msg),
             RocksDBError::Transaction(msg) => Self::Other(format!("Transaction error: {}", msg)),
             RocksDBError::Config(msg) => Self::Other(msg),

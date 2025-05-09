@@ -1,0 +1,221 @@
+#[test]
+fn test_storage_proof_generation() {
+    let (db, _temp_dir) = create_test_db();
+    
+    // Setup initial state
+    let read_tx = RocksTransaction::<false>::new(db.clone(), false);
+    let write_tx = RocksTransaction::<true>::new(db.clone(), true);
+    let (state_root, address1, _, storage_key) = setup_test_state(&read_tx, &write_tx);
+    
+    // Generate a proof for account1 including storage
+    let proof_tx = RocksTransaction::<false>::new(db.clone(), false);
+    
+    // Create a proof generator using RETH's Proof struct
+    let proof_generator = Proof::new(
+        proof_tx.trie_cursor_factory(),
+        proof_tx.hashed_cursor_factory()
+    );
+    
+    // Generate account proof with storage slot
+    let account_proof = proof_generator
+        .account_proof(address1, &[storage_key])
+        .expect("Failed to generate account proof with storage");
+    
+    // Verify account proof
+    assert!(!account_proof.account_proof.is_empty(), "Account proof should not be empty");
+    println!("Generated account proof with {} nodes", account_proof.account_proof.len());
+    
+    // Verify storage proof
+    assert!(
+        account_proof.storage_proofs.contains_key(&storage_key),
+        "Storage proof should exist for the specified key"
+    );
+    println!(
+        "Generated storage proof with {} nodes", 
+        account_proof.storage_proofs[&storage_key].len()
+    );
+    
+    // Verify the proof matches the state root
+    assert_eq!(account_proof.root(), state_root, "Proof root should match state root");
+}
+
+#[test]
+fn test_multiproof_generation() {
+    let (db, _temp_dir) = create_test_db();
+    
+    // Setup initial state
+    let read_tx = RocksTransaction::<false>::new(db.clone(), false);
+    let write_tx = RocksTransaction::<true>::new(db.clone(), true);
+    let (state_root, address1, address2, storage_key) = setup_test_state(&read_tx, &write_tx);
+    
+    // Generate a multiproof for multiple accounts and storage
+    let proof_tx = RocksTransaction::<false>::new(db.clone(), false);
+    
+    // Create a proof generator using RETH's Proof struct
+    let proof_generator = Proof::new(
+        proof_tx.trie_cursor_factory(),
+        proof_tx.hashed_cursor_factory()
+    );
+    
+    // Create targets for multiproof (both accounts, one with storage)
+    use std::collections::HashMap;
+    use std::collections::HashSet;
+    let mut targets = HashMap::new();
+    targets.insert(keccak256(address1), HashSet::from_iter([keccak256(storage_key)]));
+    targets.insert(keccak256(address2), HashSet::new());
+    
+    // Generate multiproof
+    let multiproof = proof_generator
+        .multiproof(targets)
+        .expect("Failed to generate multiproof");
+    
+    // Verify the proof contains data
+    assert!(!multiproof.account_subtree.is_empty(), "Account subtree should not be empty");
+    
+    // Check that both accounts are in the proof
+    assert!(
+        multiproof.storages.contains_key(&keccak256(address1)),
+        "Multiproof should contain account1"
+    );
+    assert!(
+        multiproof.storages.contains_key(&keccak256(address2)),
+        "Multiproof should contain account2"
+    );
+    
+    // Check storage proof for account1
+    let storage_proof = &multiproof.storages[&keccak256(address1)];
+    assert!(!storage_proof.subtree.is_empty(), "Storage proof should not be empty");
+}
+
+#[test]
+fn test_proof_verification() {
+    let (db, _temp_dir) = create_test_db();
+    
+    // Setup initial state
+    let read_tx = RocksTransaction::<false>::new(db.clone(), false);
+    let write_tx = RocksTransaction::<true>::new(db.clone(), true);
+    let (state_root, address1, _, storage_key) = setup_test_state(&read_tx, &write_tx);
+    
+    // Generate a proof
+    let proof_tx = RocksTransaction::<false>::new(db.clone(), false);
+    let proof_generator = Proof::new(
+        proof_tx.trie_cursor_factory(),
+        proof_tx.hashed_cursor_factory()
+    );
+    
+    // Generate account proof with storage
+    let account_proof = proof_generator
+        .account_proof(address1, &[storage_key])
+        .expect("Failed to generate account proof");
+    
+    // Get the expected account and storage data
+    let account = proof_tx.get_account(address1).unwrap().unwrap();
+    let storage_value = proof_tx.get_storage_value(address1, storage_key).unwrap().unwrap_or_default();
+    
+    // Now verify the proof
+    // In RETH, verification typically happens through the MultiProof/AccountProof methods
+    
+    // Verify account proof (root verification is the most basic check)
+    assert_eq!(account_proof.root(), state_root, "Account proof root should match state root");
+    
+    // More comprehensive verification would use the verification functions in RETH
+    // For example, something like:
+    let verification_result = reth_trie_common::verify_account_proof(
+        state_root,
+        address1,
+        Some(&account),
+        &account_proof.account_proof
+    );
+    
+    assert!(verification_result.is_ok(), "Account proof verification should succeed");
+    
+    // Verify storage proof
+    let storage_verification = reth_trie_common::verify_storage_proof(
+        account.storage_root,
+        storage_key,
+        storage_value,
+        &account_proof.storage_proofs[&storage_key]
+    );
+    
+    assert!(storage_verification.is_ok(), "Storage proof verification should succeed");
+}
+
+#[test]
+fn test_proof_with_state_changes() {
+    let (db, _temp_dir) = create_test_db();
+    
+    // Setup initial state
+    let read_tx = RocksTransaction::<false>::new(db.clone(), false);
+    let write_tx = RocksTransaction::<true>::new(db.clone(), true);
+    let (_initial_root, address1, _, storage_key) = setup_test_state(&read_tx, &write_tx);
+    
+    // Generate a proof for the initial state
+    let proof_tx = RocksTransaction::<false>::new(db.clone(), false);
+    let initial_proof = Proof::new(
+        proof_tx.trie_cursor_factory(),
+        proof_tx.hashed_cursor_factory()
+    )
+    .account_proof(address1, &[storage_key])
+    .expect("Failed to generate initial proof");
+    
+    // Modify the state
+    let update_read_tx = RocksTransaction::<false>::new(db.clone(), false);
+    let update_write_tx = RocksTransaction::<true>::new(db.clone(), true);
+    
+    // Create modified state
+    let mut updated_post_state = HashedPostState::default();
+    let hashed_address = keccak256(address1);
+    
+    // Update account
+    let updated_account = Account {
+        nonce: 2,                  // Changed
+        balance: U256::from(2000), // Changed
+        bytecode_hash: Some(B256::from([0x11; 32])),
+    };
+    updated_post_state.accounts.insert(hashed_address, Some(updated_account));
+    
+    // Update storage
+    let mut updated_storage = reth_trie::HashedStorage::default();
+    updated_storage.storage.insert(storage_key, U256::from(84)); // Changed value
+    updated_post_state.storages.insert(hashed_address, updated_storage);
+    
+    // Calculate new state root
+    let _updated_root = calculate_state_root_with_updates(
+        &update_read_tx, 
+        &update_write_tx, 
+        updated_post_state
+    ).unwrap();
+    update_write_tx.commit().unwrap();
+    
+    // Verify that the root has changed
+    assert_ne!(_initial_root, _updated_root, "Root should change after state update");
+    
+    // Generate a proof for the updated state
+    let updated_proof_tx = RocksTransaction::<false>::new(db.clone(), false);
+    let updated_proof = Proof::new(
+        updated_proof_tx.trie_cursor_factory(),
+        updated_proof_tx.hashed_cursor_factory()
+    )
+    .account_proof(address1, &[storage_key])
+    .expect("Failed to generate updated proof");
+    
+    // Verify the updated proof matches the new root
+    assert_eq!(updated_proof.root(), _updated_root, "Updated proof root should match new state root");
+    
+    // Verify the old proof doesn't match the new root
+    assert_ne!(initial_proof.root(), _updated_root, "Old proof should not match new root");
+    
+    // Get the updated account and storage data
+    let new_account = updated_proof_tx.get_account(address1).unwrap().unwrap();
+    let new_storage_value = updated_proof_tx
+        .get_storage_value(address1, storage_key)
+        .unwrap()
+        .unwrap_or_default();
+    
+    // Verify the account has changed
+    assert_eq!(new_account.nonce, 2, "Account nonce should be updated");
+    assert_eq!(new_account.balance, U256::from(2000), "Account balance should be updated");
+    
+    // Verify the storage has changed
+    assert_eq!(new_storage_value, U256::from(84), "Storage value should be updated");
+}

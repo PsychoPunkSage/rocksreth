@@ -1,1 +1,1 @@
-pub mod rocks;
+pub(crate) mod rocks;

@@ -3,12 +3,11 @@ use crate::{
     tables::trie::{AccountTrieTable, StorageTrieTable, TrieNibbles, TrieNodeValue, TrieTable},
 };
 use alloy_primitives::{keccak256, B256};
-use reth_db::transaction::DbTx;
 use reth_db_api::transaction::DbTxMut;
 use reth_execution_errors::StateRootError;
 use reth_trie::{
-    hashed_cursor::HashedPostStateCursorFactory, updates::TrieUpdates, AccountProof,
-    BranchNodeCompact, HashedPostState, Nibbles, StateRoot, StorageProof, StoredNibbles,
+    hashed_cursor::HashedPostStateCursorFactory, updates::TrieUpdates, BranchNodeCompact,
+    HashedPostState, StateRoot, StoredNibbles,
 };
 
 ////////////////////////////
@@ -38,12 +37,12 @@ pub fn calculate_state_root_with_updates(
     write_tx: &RocksTransaction<true>,
     post_state: HashedPostState,
 ) -> Result<B256, StateRootError> {
+    // let prefix_sets = post_state.construct_prefix_sets().freeze();
     println!("Post state account count: {}", post_state.accounts.len());
     println!("Post state storage count: {}", post_state.storages.len());
-    println!("Post state storage count: {:?}", post_state);
-    // let prefix_sets = post_state.construct_prefix_sets().freeze();
+    println!("Post state storage count: \n  -{:?}", post_state);
     let prefix_sets = post_state.construct_prefix_sets();
-    println!("Prefix sets: {:?}", prefix_sets);
+    println!("Prefix sets: \n  -{:?}", prefix_sets);
     let frozen_sets = prefix_sets.freeze();
     let state_sorted = post_state.into_sorted();
     // println!("a2");
@@ -129,7 +128,7 @@ fn encode_branch_node_to_rlp(node: &BranchNodeCompact) -> Vec<u8> {
     result.push(node.hashes.len() as u8);
 
     // Add each hash (32 bytes each)
-    for hash in &node.hashes {
+    for hash in node.hashes.iter() {
         result.extend_from_slice(hash.as_slice());
     }
 

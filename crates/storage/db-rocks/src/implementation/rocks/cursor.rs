@@ -18,17 +18,9 @@ use std::{marker::PhantomData, ops::Bound};
 pub struct RocksCursor<T: Table, const WRITE: bool> {
     db: Arc<DB>,
     cf: CFPtr,
-    // // Store the current key-value pair
-    // current_item: Option<(Box<[u8]>, Box<[u8]>)>,
-    // iterator: Option<rocksdb::DBIterator<'static>>,
-    // iterator: Option<rocksdb::DBIterator<'static>>,
-    // Current position with cached key and value
-    // current_position: Mutex<Option<(T::Key, T::Value)>>,
     current_key_bytes: Mutex<Option<Vec<u8>>>,
     current_value_bytes: Mutex<Option<Vec<u8>>>,
-    // Next seek position to track where we were
     next_seek_key: Mutex<Option<Vec<u8>>>,
-    // Read options
     read_opts: ReadOptions,
     _marker: std::marker::PhantomData<T>,
 }
@@ -37,13 +29,11 @@ impl<T: Table, const WRITE: bool> RocksCursor<T, WRITE>
 where
     T::Key: Encode + Decode + Clone,
 {
-    // pub(crate) fn new(db: Arc<DB>, cf: Arc<ColumnFamily>) -> Result<Self, DatabaseError> {
     pub(crate) fn new(db: Arc<DB>, cf: CFPtr) -> Result<Self, DatabaseError> {
         Ok(Self {
             db,
             cf,
             next_seek_key: Mutex::new(None),
-            // current_position: Mutex::new(None),
             current_key_bytes: Mutex::new(None),
             current_value_bytes: Mutex::new(None),
             read_opts: ReadOptions::default(),
@@ -143,8 +133,6 @@ where
 
     /// Get the first key/value pair from the database
     fn get_first(&self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let cf = self.get_cf();
-
         // Create an iterator that starts at the beginning
         let mut iter = self.create_iterator(IteratorMode::Start);
 
@@ -174,8 +162,6 @@ where
 
     /// Get the last key/value pair from the database
     fn get_last(&self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let cf = self.get_cf();
-
         // Create an iterator that starts at the end
         let mut iter = self.create_iterator(IteratorMode::End);
 
@@ -205,8 +191,6 @@ where
 
     /// Seek to a specific key
     fn get_seek(&self, key: T::Key) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        let cf = self.get_cf();
-
         // Encode the key
         let encoded_key = key.encode();
 
@@ -301,18 +285,8 @@ where
         let mut iter =
             self.create_iterator(IteratorMode::From(&current_key_bytes, Direction::Forward));
 
-        // Skip the current item (which is the one we're positioned at)
-        match iter.next() {
-            Some(Ok(_)) => {}
-            Some(Err(e)) => {
-                return Err(DatabaseError::Other(format!("RocksDB iterator error: {}", e)))
-            }
-            None => {
-                // No entries, clear the current position
-                self.clear_position();
-                return Ok(None);
-            }
-        }
+        // Get the current item
+        let current_item = iter.next();
 
         // Get the next item
         match iter.next() {
@@ -713,7 +687,6 @@ where
 {
     fn next_dup(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
         if let Some(ref current_key) = self.current_key {
-            let current_key_clone = current_key.clone();
             let next = self.inner.next()?;
             if let Some((key, value)) = next {
                 if &key == current_key {
@@ -862,8 +835,6 @@ where
     T::Value: Decompress,
 {
     fn first(&mut self) -> Result<Option<(T::Key, T::Value)>, DatabaseError> {
-        // let mut cursor_guard = self.cursor.lock().unwrap();
-        // cursor_guard.first()
         let mut guard = match self.cursor.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),

@@ -16,7 +16,6 @@ reth-db-api.workspace = true
 reth-db.workspace = true
 reth-codecs.workspace = true
 reth-storage-api.workspace = true
-# reth-trie = { workspace = true }
 reth-trie = { workspace = true, features = ["test-utils"] }
 reth-trie-db = { workspace = true }
 reth-trie-common = { workspace = true }
@@ -27,7 +26,7 @@ alloy-rlp = { workspace = true }
 
 # rocksdb
 rocksdb = { version = "0.22.0" }
-serde = { version = "1.0.218", features = ["derive"] }
+serde = { workspace = true }
 
 # database interfaces
 bytes = { workspace = true }
@@ -55,21 +54,7 @@ reth-primitives = { workspace = true, features = ["test-utils"] }
 reth-db-api = { workspace = true }
 
 [features]
-# metrics = ["reth-metrics", "reth-trie/metrics", "dep:metrics"]
-
-[[bench]]
-name = "get"
-harness = false
-
-[[bench]]
-name = "criterion"
-harness = false
-
-# misc
-parking_lot.workspace = true
-tracing.workspace = true
-metrics.workspace = true
-thiserror.workspace = true
+metrics = []
 
 [lints]
 workspace = true

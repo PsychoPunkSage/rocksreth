@@ -6,25 +6,20 @@ use alloy_primitives::{keccak256, Address, B256};
 use eyre::Ok;
 use reth_db_api::{
     cursor::{DbCursorRO, DbDupCursorRO},
-    transaction::{DbTx, DbTxMut},
+    transaction::DbTx,
     DatabaseError,
 };
-use reth_execution_errors::StateRootError;
-use reth_primitives::Account;
-#[cfg(feature = "metrics")]
-use reth_trie::metrics::{TrieRootMetrics, TrieType};
 use reth_trie::{
-    hashed_cursor::{HashedCursorFactory, HashedPostStateCursorFactory},
-    trie_cursor::InMemoryTrieCursorFactory,
-    updates::TrieUpdates,
-    BranchNodeCompact, HashedPostState, KeccakKeyHasher, StateRoot, StateRootProgress, StorageRoot,
-    StoredNibbles, TrieInput,
+    hashed_cursor::HashedPostStateCursorFactory, trie_cursor::InMemoryTrieCursorFactory,
+    updates::TrieUpdates, BranchNodeCompact, HashedPostState, KeccakKeyHasher, StateRoot,
+    StateRootProgress, StorageRoot, StoredNibbles, TrieInput,
 };
+#[cfg(feature = "metrics")]
+use reth_trie::{metrics::TrieRootMetrics, TrieType};
 use reth_trie_db::{
     DatabaseHashedCursorFactory, DatabaseStateRoot, DatabaseStorageRoot, DatabaseTrieCursorFactory,
-    PrefixSetLoader, StateCommitment,
+    PrefixSetLoader,
 };
-use std::fmt::format;
 
 /// Implementation of trie storage operations
 impl<const WRITE: bool> RocksTransaction<WRITE> {
